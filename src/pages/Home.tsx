@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import Navigation from "@/components/Navigation";
@@ -81,13 +82,17 @@ const Home = () => {
             </p>
             
             <div className="flex flex-wrap gap-4 justify-center">
-              <Button size="lg" className="gap-2">
-                Find Study Sessions
-                <ArrowRight className="h-4 w-4" />
-              </Button>
-              <Button size="lg" variant="outline">
-                Create a Room
-              </Button>
+              <Link to="/auth">
+                <Button size="lg" className="gap-2">
+                  Find Study Sessions
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </Link>
+              <Link to="/auth">
+                <Button size="lg" variant="outline">
+                  Create a Room
+                </Button>
+              </Link>
             </div>
 
             <div className="flex flex-wrap gap-6 justify-center text-sm text-muted-foreground pt-4">
@@ -156,7 +161,9 @@ const Home = () => {
             <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
               Join thousands of students mastering skills together
             </p>
-            <Button size="lg">Get Started Free</Button>
+            <Link to="/auth">
+              <Button size="lg">Get Started Free</Button>
+            </Link>
           </Card>
         </div>
       </section>
