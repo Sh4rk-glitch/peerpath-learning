@@ -1,136 +1,220 @@
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import Navigation from "@/components/Navigation";
 import SessionCard from "@/components/SessionCard";
-import { Calendar, Filter, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card } from "@/components/ui/card";
+import { Calendar, Plus, Clock } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
+import { useToast } from "@/hooks/use-toast";
+
+interface Session {
+  id: string;
+  title: string;
+  host_id: string;
+  start_time: string;
+  duration_minutes: number;
+  capacity: number;
+  status: string;
+  format: string;
+  host_name: string;
+  subjects: {
+    name: string;
+    category: string;
+  };
+  session_participants: Array<{ id: string }>;
+}
 
 const Schedule = () => {
-  const [view, setView] = useState<"list" | "calendar">("list");
+  const navigate = useNavigate();
+  const { user, loading } = useAuth();
+  const { toast } = useToast();
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [loadingSessions, setLoadingSessions] = useState(true);
 
-  const sessions = [
-    {
-      title: "Cellular Respiration Deep Dive",
-      host: "Sarah Chen",
+  useEffect(() => {
+    if (!loading && !user) {
+      navigate("/auth");
+    }
+  }, [user, loading, navigate]);
+
+  useEffect(() => {
+    if (user) {
+      fetchSessions();
+    }
+  }, [user]);
+
+  const fetchSessions = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("sessions")
+        .select(`
+          *,
+          subjects (name, category),
+          session_participants (id)
+        `)
+        .eq("status", "scheduled")
+        .gte("start_time", new Date().toISOString())
+        .order("start_time", { ascending: true });
+
+      if (error) throw error;
+
+      // Fetch host names separately
+      const sessionsWithHosts = await Promise.all(
+        (data || []).map(async (session: any) => {
+          const { data: hostData } = await supabase
+            .from("profiles")
+            .select("display_name")
+            .eq("id", session.host_id)
+            .single();
+
+          return {
+            ...session,
+            host_name: hostData?.display_name || "Unknown",
+          };
+        })
+      );
+
+      setSessions(sessionsWithHosts as any);
+    } catch (error: any) {
+      toast({
+        title: "Error loading sessions",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setLoadingSessions(false);
+    }
+  };
+
+  const formatSessionData = (session: Session) => {
+    const startDate = new Date(session.start_time);
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    let timeStr = "";
+    if (startDate.toDateString() === today.toDateString()) {
+      timeStr = `Today ${startDate.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      })}`;
+    } else if (startDate.toDateString() === tomorrow.toDateString()) {
+      timeStr = `Tomorrow ${startDate.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      })}`;
+    } else {
+      timeStr = startDate.toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+    }
+
+    return {
+      title: session.title,
+      host: session.host_name,
       hostRating: 4.8,
-      time: "Today 2:30 PM",
-      duration: 45,
-      capacity: 20,
-      spotsLeft: 5,
-      subject: "AP Biology",
-    },
-    {
-      title: "Calculus Problem Solving",
-      host: "Mike Johnson",
-      hostRating: 4.9,
-      time: "Today 4:00 PM",
-      duration: 60,
-      capacity: 15,
-      spotsLeft: 8,
-      subject: "Calculus",
-    },
-    {
-      title: "Spanish Conversation Practice",
-      host: "Elena Rodriguez",
-      hostRating: 4.7,
-      time: "Today 5:15 PM",
-      duration: 30,
-      capacity: 12,
-      spotsLeft: 3,
-      subject: "Spanish",
-    },
-    {
-      title: "World War II Discussion",
-      host: "David Kim",
-      hostRating: 4.9,
-      time: "Tomorrow 3:00 PM",
-      duration: 50,
-      capacity: 25,
-      spotsLeft: 15,
-      subject: "History",
-    },
-  ];
+      subject: session.subjects.name,
+      time: timeStr,
+      duration: session.duration_minutes,
+      participants: session.session_participants.length,
+      capacity: session.capacity,
+      spotsLeft: session.capacity - session.session_participants.length,
+      format: session.format,
+      category: session.subjects.category as "science" | "math" | "humanities" | "language" | "arts",
+    };
+  };
+
+  if (loading || loadingSessions) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navigation />
+        <div className="container py-8">
+          <div className="flex items-center justify-center min-h-[400px]">
+            <p className="text-muted-foreground">Loading sessions...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const upcomingSessions = sessions.slice(0, 6);
 
   return (
     <div className="min-h-screen bg-background">
       <Navigation />
-      
+
       <div className="container py-8">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="mb-2">Live Sessions</h1>
-          <p className="text-xl text-muted-foreground">
-            Browse and book study sessions with peers
-          </p>
-        </div>
-
-        {/* Filters and Actions */}
-        <div className="flex flex-wrap gap-4 mb-8">
-          <div className="flex-1 min-w-[300px]">
-            <Input placeholder="Search sessions..." />
-          </div>
-          
-          <div className="flex gap-2">
-            <Button variant="outline" className="gap-2">
-              <Filter className="h-4 w-4" />
-              Filter
-            </Button>
-            
-            <div className="flex rounded-lg border border-border overflow-hidden">
-              <Button
-                variant={view === "list" ? "secondary" : "ghost"}
-                size="sm"
-                onClick={() => setView("list")}
-                className="rounded-none"
-              >
-                List
-              </Button>
-              <Button
-                variant={view === "calendar" ? "secondary" : "ghost"}
-                size="sm"
-                onClick={() => setView("calendar")}
-                className="rounded-none"
-              >
-                <Calendar className="h-4 w-4" />
-              </Button>
-            </div>
-            
-            <Button className="gap-2">
-              <Plus className="h-4 w-4" />
-              Create Room
-            </Button>
-          </div>
-        </div>
-
-        {/* Filter Tags */}
-        <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
-          <Badge variant="secondary" className="cursor-pointer">All</Badge>
-          <Badge variant="outline" className="cursor-pointer">Science</Badge>
-          <Badge variant="outline" className="cursor-pointer">Math</Badge>
-          <Badge variant="outline" className="cursor-pointer">Humanities</Badge>
-          <Badge variant="outline" className="cursor-pointer">Language</Badge>
-          <Badge variant="outline" className="cursor-pointer">Today</Badge>
-          <Badge variant="outline" className="cursor-pointer">This Week</Badge>
-        </div>
-
-        {/* Sessions List */}
-        <div className="space-y-4">
-          {sessions.map((session, index) => (
-            <SessionCard key={index} {...session} />
-          ))}
-        </div>
-
-        {/* Empty State for Calendar View */}
-        {view === "calendar" && (
-          <div className="mt-8 p-12 border-2 border-dashed rounded-lg text-center">
-            <Calendar className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-            <h3 className="text-lg font-semibold mb-2">Calendar View</h3>
-            <p className="text-muted-foreground">
-              Calendar integration coming soon
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="mb-2">Schedule</h1>
+            <p className="text-xl text-muted-foreground">
+              Browse and join upcoming study sessions
             </p>
           </div>
-        )}
+          <Button className="gap-2">
+            <Plus className="h-4 w-4" />
+            Create Session
+          </Button>
+        </div>
+
+        <Tabs defaultValue="upcoming" className="space-y-6">
+          <TabsList>
+            <TabsTrigger value="upcoming">Upcoming</TabsTrigger>
+            <TabsTrigger value="my-sessions">My Sessions</TabsTrigger>
+            <TabsTrigger value="past">Past</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="upcoming" className="space-y-6">
+            {upcomingSessions.length > 0 ? (
+              <div className="grid gap-6 md:grid-cols-2">
+                {upcomingSessions.map((session) => (
+                  <SessionCard key={session.id} {...formatSessionData(session)} />
+                ))}
+              </div>
+            ) : (
+              <Card className="p-12 text-center">
+                <Calendar className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+                <h3 className="text-lg font-semibold mb-2">No upcoming sessions</h3>
+                <p className="text-muted-foreground mb-4">
+                  Be the first to create a study session
+                </p>
+                <Button className="gap-2">
+                  <Plus className="h-4 w-4" />
+                  Create Session
+                </Button>
+              </Card>
+            )}
+          </TabsContent>
+
+          <TabsContent value="my-sessions">
+            <Card className="p-12 text-center">
+              <Clock className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+              <h3 className="text-lg font-semibold mb-2">Your sessions</h3>
+              <p className="text-muted-foreground">
+                Sessions you've created or joined will appear here
+              </p>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="past">
+            <Card className="p-12 text-center">
+              <Calendar className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+              <h3 className="text-lg font-semibold mb-2">Past sessions</h3>
+              <p className="text-muted-foreground">
+                Previously attended sessions will appear here
+              </p>
+            </Card>
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );
