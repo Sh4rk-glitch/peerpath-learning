@@ -185,7 +185,7 @@ ALTER TABLE public.mentor_availability ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Profiles viewable by everyone"
   ON public.profiles FOR SELECT
   TO authenticated
-  USING (true);
+  USING (auth.uid() IS NOT NULL);
 
 CREATE POLICY "Users can update own profile"
   ON public.profiles FOR UPDATE
@@ -201,7 +201,7 @@ CREATE POLICY "Users can insert own profile"
 CREATE POLICY "Roles viewable by authenticated users"
   ON public.user_roles FOR SELECT
   TO authenticated
-  USING (true);
+  USING (auth.uid() IS NOT NULL);
 
 CREATE POLICY "Admins can manage roles"
   ON public.user_roles FOR ALL
@@ -212,7 +212,7 @@ CREATE POLICY "Admins can manage roles"
 CREATE POLICY "Subjects viewable by everyone"
   ON public.subjects FOR SELECT
   TO authenticated
-  USING (true);
+  USING (auth.uid() IS NOT NULL);
 
 CREATE POLICY "Teachers can manage subjects"
   ON public.subjects FOR ALL
@@ -223,7 +223,7 @@ CREATE POLICY "Teachers can manage subjects"
 CREATE POLICY "Skills viewable by everyone"
   ON public.skill_nodes FOR SELECT
   TO authenticated
-  USING (true);
+  USING (auth.uid() IS NOT NULL);
 
 CREATE POLICY "Teachers can manage skills"
   ON public.skill_nodes FOR ALL
@@ -234,7 +234,7 @@ CREATE POLICY "Teachers can manage skills"
 CREATE POLICY "Prerequisites viewable by everyone"
   ON public.skill_prerequisites FOR SELECT
   TO authenticated
-  USING (true);
+  USING (auth.uid() IS NOT NULL);
 
 CREATE POLICY "Teachers can manage prerequisites"
   ON public.skill_prerequisites FOR ALL
@@ -261,7 +261,7 @@ CREATE POLICY "Users can modify own progress"
 CREATE POLICY "Sessions viewable by everyone"
   ON public.sessions FOR SELECT
   TO authenticated
-  USING (true);
+  USING (auth.uid() IS NOT NULL);
 
 CREATE POLICY "Users can create sessions"
   ON public.sessions FOR INSERT
@@ -282,7 +282,7 @@ CREATE POLICY "Hosts can delete own sessions"
 CREATE POLICY "Participants viewable by everyone"
   ON public.session_participants FOR SELECT
   TO authenticated
-  USING (true);
+  USING (auth.uid() IS NOT NULL);
 
 CREATE POLICY "Users can join sessions"
   ON public.session_participants FOR INSERT
@@ -332,7 +332,7 @@ CREATE POLICY "Participants can update notes"
 CREATE POLICY "Badges viewable by everyone"
   ON public.badges FOR SELECT
   TO authenticated
-  USING (true);
+  USING (auth.uid() IS NOT NULL);
 
 CREATE POLICY "Admins can manage badges"
   ON public.badges FOR ALL
@@ -343,18 +343,18 @@ CREATE POLICY "Admins can manage badges"
 CREATE POLICY "User badges viewable by everyone"
   ON public.user_badges FOR SELECT
   TO authenticated
-  USING (true);
+  USING (auth.uid() IS NOT NULL);
 
 CREATE POLICY "System can award badges"
   ON public.user_badges FOR INSERT
   TO authenticated
-  WITH CHECK (true);
+  WITH CHECK (public.has_role(auth.uid(), 'admin'));
 
 -- Mentor availability: public read, mentors manage own
 CREATE POLICY "Availability viewable by everyone"
   ON public.mentor_availability FOR SELECT
   TO authenticated
-  USING (true);
+  USING (auth.uid() IS NOT NULL);
 
 CREATE POLICY "Mentors can set own availability"
   ON public.mentor_availability FOR ALL
@@ -368,7 +368,8 @@ BEGIN
   NEW.updated_at = NOW();
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SET search_path = public;
+
 
 CREATE TRIGGER set_profiles_updated_at
   BEFORE UPDATE ON public.profiles
@@ -406,3 +407,29 @@ CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW
   EXECUTE FUNCTION public.handle_new_user();
+
+-- Secure badge-award function for admin/service usage
+CREATE OR REPLACE FUNCTION public.award_badge(_user_id UUID, _badge_id UUID)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NOT public.has_role(auth.uid(), 'admin') THEN
+    RAISE EXCEPTION 'only admins can award badges';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM public.badges WHERE id = _badge_id) THEN
+    RAISE EXCEPTION 'badge not found';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM public.user_badges WHERE user_id = _user_id AND badge_id = _badge_id) THEN
+    RAISE NOTICE 'user already has badge';
+    RETURN;
+  END IF;
+
+  INSERT INTO public.user_badges (user_id, badge_id)
+  VALUES (_user_id, _badge_id);
+END;
+$$;

@@ -1,10 +1,11 @@
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Clock, Users } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 interface SubjectCardProps {
   title: string;
-  category: "science" | "math" | "humanities" | "language" | "arts";
+  category: "science" | "math" | "humanities" | "language" | "arts" | "tech" | "health";
   nextSession?: string;
   activeUsers?: number;
   icon: React.ReactNode;
@@ -16,11 +17,20 @@ const categoryColors = {
   humanities: "bg-subject-humanities/10 text-subject-humanities border-subject-humanities/20",
   language: "bg-subject-language/10 text-subject-language border-subject-language/20",
   arts: "bg-subject-arts/10 text-subject-arts border-subject-arts/20",
+  tech: "bg-subject-tech/10 text-subject-tech border-subject-tech/20",
+  health: "bg-subject-health/10 text-subject-health border-subject-health/20",
 };
 
 const SubjectCard = ({ title, category, nextSession, activeUsers, icon }: SubjectCardProps) => {
+  const navigate = useNavigate();
+
+  const handleClick = () => {
+    const slug = encodeURIComponent(title.replace(/\s+/g, "-").toLowerCase());
+    navigate(`/subjects/${slug}`);
+  };
+
   return (
-    <Card className="group relative overflow-hidden transition-all hover:shadow-lg hover:scale-[1.02] cursor-pointer">
+    <Card onClick={handleClick} className="group relative overflow-hidden transition-all hover:shadow-lg hover:scale-[1.02] cursor-pointer">
       <div className="p-6">
         <div className={`inline-flex p-3 rounded-lg mb-4 ${categoryColors[category]}`}>
           {icon}

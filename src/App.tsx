@@ -10,6 +10,8 @@ import Schedule from "./pages/Schedule";
 import Dashboard from "./pages/Dashboard";
 import Profile from "./pages/Profile";
 import Auth from "./pages/Auth";
+import Lesson from "./pages/Lesson";
+import Quiz from "./pages/Quiz";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -25,6 +27,9 @@ const App = () => (
           <Route path="/home" element={<Home />} />
           <Route path="/auth" element={<Auth />} />
           <Route path="/subjects" element={<Subjects />} />
+          <Route path="/subjects/:slug" element={<Subjects />} />
+          <Route path="/lesson" element={<Lesson />} />
+          <Route path="/quiz" element={<Quiz />} />
           <Route path="/schedule" element={<Schedule />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/profile" element={<Profile />} />

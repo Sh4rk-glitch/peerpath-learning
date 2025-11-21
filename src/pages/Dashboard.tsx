@@ -2,10 +2,31 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import Navigation from "@/components/Navigation";
+import { useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import ProgressCard from "@/components/ProgressCard";
 import { Flame, Target, Award, Calendar, TrendingUp, Clock } from "lucide-react";
 
 const Dashboard = () => {
+  const { user } = useAuth();
+  const [displayName, setDisplayName] = useState<string | null>(null);
+  const [loadingProfile, setLoadingProfile] = useState(true);
+
+  useEffect(() => {
+    const fetchProfile = async () => {
+      if (!user) { setLoadingProfile(false); return; }
+      try {
+        const { data, error } = await supabase.from("profiles").select("display_name").eq("id", user.id).single();
+        if (!error && data) setDisplayName(data.display_name);
+      } catch (e) {
+        // ignore
+      }
+      setLoadingProfile(false);
+    };
+
+    fetchProfile();
+  }, [user]);
   const progressData = [
     {
       subject: "AP Biology",
@@ -51,7 +72,9 @@ const Dashboard = () => {
       <div className="container py-8">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="mb-2">Welcome back, Alex!</h1>
+          <h1 className="mb-2">{
+            loadingProfile ? 'Welcome back' : `Welcome back, ${displayName ?? user?.user_metadata?.full_name ?? user?.email?.split('@')[0] ?? 'Student'}!`
+          }</h1>
           <p className="text-xl text-muted-foreground">
             Track your progress and continue learning
           </p>

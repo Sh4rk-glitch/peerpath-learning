@@ -42,6 +42,13 @@ const Home = () => {
       activeUsers: 124,
       icon: <Palette className="h-6 w-6" />,
     },
+    {
+      title: "Physics",
+      category: "science" as const,
+      nextSession: "Today 6:00 PM",
+      activeUsers: 142,
+      icon: <Target className="h-6 w-6" />,
+    },
   ];
 
   const howItWorks = [

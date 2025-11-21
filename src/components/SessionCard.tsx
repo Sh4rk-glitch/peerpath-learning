@@ -13,6 +13,8 @@ interface SessionCardProps {
   capacity: number;
   spotsLeft: number;
   subject: string;
+  sessionId?: string;
+  onJoin?: (sessionId: string) => Promise<void> | void;
 }
 
 const SessionCard = ({
@@ -63,7 +65,9 @@ const SessionCard = ({
           </div>
 
           <div className="flex gap-2">
-            <Button className="flex-1">Reserve Spot</Button>
+            <Button className="flex-1" onClick={() => sessionId && onJoin && onJoin(sessionId)}>
+              Reserve Spot
+            </Button>
             <Button variant="outline">Details</Button>
           </div>
         </div>

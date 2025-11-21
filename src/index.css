@@ -140,6 +140,11 @@ All colors MUST be HSL.
     animation: fadeInUp 0.5s ease-out;
   }
 
+  /* Prevent flicker on theme switch by temporarily disabling transitions */
+  .disable-theme-transition * {
+    transition: none !important;
+  }
+
   @keyframes fadeInUp {
     from {
       opacity: 0;
@@ -149,5 +154,71 @@ All colors MUST be HSL.
       opacity: 1;
       transform: translateY(0);
     }
+  }
+
+  /* Simple dialog fade/zoom keyframes */
+  @keyframes dialog-fade-in {
+    from { opacity: 0; transform: scale(0.98); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  @keyframes dialog-fade-out {
+    from { opacity: 1; transform: scale(1); }
+    to { opacity: 0; transform: scale(0.98); }
+  }
+
+  .fade-in { animation: dialog-fade-in 180ms ease-out both; }
+  .fade-out { animation: dialog-fade-out 120ms ease-in both; }
+  .zoom-in { animation: dialog-fade-in 200ms cubic-bezier(.2,.8,.2,1) both; }
+  .zoom-out { animation: dialog-fade-out 140ms cubic-bezier(.2,.8,.2,1) both; }
+
+  /* Theme wave animation: subtle expanding radial overlay */
+  .theme-wave::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(circle at var(--tw-x, 50%) var(--tw-y, 50%), rgba(255,255,255,0.12), rgba(255,255,255,0.06) 20%, transparent 40%);
+    opacity: 0;
+    mix-blend-mode: overlay;
+    animation: theme-wave 700ms ease-out forwards;
+    z-index: 9999;
+  }
+
+  @keyframes theme-wave {
+    0% { opacity: 0; transform: scale(0.6); }
+    40% { opacity: 1; transform: scale(1.05); }
+    100% { opacity: 0; transform: scale(1.6); }
+  }
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-new(root) {
+  animation: wave-in 0.5s ease-in-out;
+}
+
+::view-transition-old(root) {
+  animation: wave-out 0.5s ease-in-out;
+}
+
+@keyframes wave-in {
+  from {
+    clip-path: circle(0% at 50% 0%);
+  }
+  to {
+    clip-path: circle(150% at 50% 0%);
+  }
+}
+
+@keyframes wave-out {
+  from {
+    clip-path: circle(150% at 50% 0%);
+  }
+  to {
+    clip-path: circle(0% at 50% 0%);
   }
 }

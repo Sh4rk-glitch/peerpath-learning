@@ -66,6 +66,8 @@ export default {
           humanities: "hsl(var(--subject-humanities))",
           language: "hsl(var(--subject-language))",
           arts: "hsl(var(--subject-arts))",
+          tech: "hsl(var(--subject-tech))",
+          health: "hsl(var(--subject-health))",
         },
       },
       backgroundImage: {

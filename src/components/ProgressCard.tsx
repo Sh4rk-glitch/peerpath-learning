@@ -9,7 +9,7 @@ interface ProgressCardProps {
   skillsCompleted: number;
   totalSkills: number;
   recentGain: number;
-  category: "science" | "math" | "humanities" | "language" | "arts";
+  category: "science" | "math" | "humanities" | "language" | "arts" | "tech" | "health";
 }
 
 const categoryColors = {
@@ -18,6 +18,8 @@ const categoryColors = {
   humanities: "text-subject-humanities",
   language: "text-subject-language",
   arts: "text-subject-arts",
+  tech: "text-subject-tech",
+  health: "text-subject-health",
 };
 
 const ProgressCard = ({

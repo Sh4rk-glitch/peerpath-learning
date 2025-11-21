@@ -1,11 +1,13 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Search, BookOpen, Calendar, LayoutDashboard, Library, User, LogOut } from "lucide-react";
+import { Search, BookOpen, Calendar, LayoutDashboard, Library, User, LogOut, Moon, Sun } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import useTheme from "@/hooks/useTheme";
 
 const Navigation = () => {
   const { user, signOut } = useAuth();
+  const { theme, toggle } = useTheme();
 
   return (
     <nav className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -27,6 +29,21 @@ const Navigation = () => {
         </div>
 
         <div className="flex items-center gap-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={(e: any) => {
+              try {
+                // store last click position for theme wave origin
+                (window as any).__lastThemeToggleX = e.clientX;
+                (window as any).__lastThemeToggleY = e.clientY;
+              } catch (err) {}
+              toggle();
+            }}
+            title="Toggle theme"
+          >
+            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </Button>
           {user ? (
             <>
               <Link to="/subjects">
@@ -57,9 +74,11 @@ const Navigation = () => {
               </Button>
             </>
           ) : (
-            <Link to="/auth">
-              <Button size="sm">Sign In</Button>
-            </Link>
+            <div className="ml-auto">
+              <Link to="/auth">
+                <Button size="sm">Sign In</Button>
+              </Link>
+            </div>
           )}
         </div>
       </div>

@@ -138,7 +138,18 @@ const Profile = () => {
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">Timezone</span>
-                  <span className="font-medium">{profile.timezone}</span>
+                  <span className="font-medium">{
+                    (() => {
+                      try {
+                        const date = new Date();
+                        // Get the short timezone name (e.g., EST, CST)
+                        const tz = Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).formatToParts(date).find(part => part.type === 'timeZoneName');
+                        return tz ? tz.value : Intl.DateTimeFormat().resolvedOptions().timeZone;
+                      } catch {
+                        return Intl.DateTimeFormat().resolvedOptions().timeZone;
+                      }
+                    })()
+                  }</span>
                 </div>
               </div>
 
