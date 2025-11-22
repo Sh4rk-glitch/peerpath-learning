@@ -80,59 +80,149 @@ function buildExpandedContent(title: string, short: string) {
   return paragraphs.join('\n\n');
 }
 
-// Attempt to use an LLM (OpenAI) to enrich lessons when an API key is supplied.
-// WARNING: Calling OpenAI from frontend exposes the key — prefer a server-side proxy.
+// Attempt to use an LLM (Gemini) to enrich lessons when an API key is supplied.
 async function generateWithLLM(subjectSlug: string, base: Array<{ title: string; content: string }>) {
   try {
-    // Call a local server-side proxy to avoid exposing API keys in the browser.
-    // Prefer calling Supabase Edge Function if available
+    // First try: Call Supabase Edge Function
     const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
     const key = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY || '';
     const fnUrl = supabaseUrl ? `${supabaseUrl.replace(/\/$/, '')}/functions/v1/generate_lessons` : null;
-    let resp: Response | null = null;
+    
     if (fnUrl) {
       try {
-        resp = await fetch(fnUrl, {
+        const resp = await fetch(fnUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'apikey': key, 'Authorization': `Bearer ${key}` },
           body: JSON.stringify({ subject: subjectSlug, base }),
         });
+        if (resp.ok) {
+          const out = await resp.json();
+          if (out && out.lessons && Array.isArray(out.lessons)) return out.lessons;
+        }
       } catch (e) {
-        resp = null;
+        console.warn('Supabase Edge Function failed, trying direct Gemini API', e);
       }
     }
-    if (!resp) {
-      // fallback to old path if function missing
-      resp = await fetch('/api/generate-lessons', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subject: subjectSlug, base }),
-      });
+
+    // Second try: Direct Gemini API call
+    const geminiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+    if (geminiKey) {
+      try {
+        const lessonTitles = base.map(l => l.title || 'Untitled').join(', ');
+        const prompt = `You are an expert educator creating comprehensive lesson content for the subject: "${subjectSlug}".\n\n` +
+          `I have these lesson topics: ${lessonTitles}\n\n` +
+          `For each topic, generate detailed educational content including:\n` +
+          `1. Overview and key concepts\n` +
+          `2. Detailed explanations with examples\n` +
+          `3. Practice problems or activities\n` +
+          `4. Summary and next steps\n\n` +
+          `Respond with a JSON array where each object has: { title: string, content: string }\n` +
+          `The content should be comprehensive (500-800 words per lesson).\n\n` +
+          `Generate enriched content for these ${base.length} lessons:\n` +
+          base.map((l, i) => `${i + 1}. ${l.title}: ${l.content}`).join('\n');
+
+        const geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${encodeURIComponent(geminiKey)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.7, maxOutputTokens: 4096 }
+          })
+        });
+
+        if (geminiResp.ok) {
+          const data = await geminiResp.json();
+          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          
+          // Extract JSON array from response
+          const jstart = text.indexOf('[');
+          const jend = text.lastIndexOf(']');
+          if (jstart !== -1 && jend !== -1 && jend > jstart) {
+            const jsonStr = text.slice(jstart, jend + 1);
+            const lessons = JSON.parse(jsonStr);
+            if (Array.isArray(lessons) && lessons.length > 0) {
+              console.log('✅ Generated lessons with Gemini API');
+              return lessons;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Direct Gemini API call failed', e);
+      }
     }
-    if (!resp.ok) return null;
-    const out = await resp.json();
-    if (out && out.lessons && Array.isArray(out.lessons)) return out.lessons;
+
     return null;
   } catch (e) {
+    console.warn('generateWithLLM error', e);
     return null;
   }
 }
 
-// New helper: request quiz generation from Supabase Edge Function (OpenAI)
+// New helper: request quiz generation from Supabase Edge Function or direct Gemini API
 export async function generateQuizWithLLM(lesson: { title: string; content: string }, count = 5) {
   try {
+    // First try: Supabase Edge Function
     const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
     const key = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY || '';
-    if (!supabaseUrl || !key) return null;
-    const fnUrl = `${supabaseUrl.replace(/\/$/, '')}/functions/v1/generate_quiz`;
-    const res = await fetch(fnUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'apikey': key, 'Authorization': `Bearer ${key}` },
-      body: JSON.stringify({ lesson, count }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (data && Array.isArray(data.questions)) return data.questions;
+    
+    if (supabaseUrl && key) {
+      try {
+        const fnUrl = `${supabaseUrl.replace(/\/$/, '')}/functions/v1/generate_quiz`;
+        const res = await fetch(fnUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'apikey': key, 'Authorization': `Bearer ${key}` },
+          body: JSON.stringify({ lesson, count }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.questions)) {
+            console.log('✅ Generated quiz with Supabase Edge Function');
+            return data.questions;
+          }
+        }
+      } catch (e) {
+        console.warn('Supabase quiz generation failed, trying direct Gemini API', e);
+      }
+    }
+
+    // Second try: Direct Gemini API call
+    const geminiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+    if (geminiKey) {
+      try {
+        const prompt = `You are a helpful assistant that generates multiple-choice quizzes from a lesson text.\n` +
+          `Respond with valid JSON only: an array of objects. Each object must have: question (string), choices (array of 4 unique strings), answerIndex (0-based integer index into choices), explanation (string briefly explaining correct answer). Do not include additional commentary.\n\n` +
+          `Lesson title: ${lesson.title}\n\nContent:\n${lesson.content}\n\nGenerate ${count} questions. Make distractors plausible and avoid repeating near-duplicates. Return JSON array.`;
+
+        const geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${encodeURIComponent(geminiKey)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.7, maxOutputTokens: 2048 }
+          })
+        });
+
+        if (geminiResp.ok) {
+          const data = await geminiResp.json();
+          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          
+          // Extract JSON array from response
+          const jstart = text.indexOf('[');
+          const jend = text.lastIndexOf(']');
+          if (jstart !== -1 && jend !== -1 && jend > jstart) {
+            const jsonStr = text.slice(jstart, jend + 1);
+            const questions = JSON.parse(jsonStr);
+            if (Array.isArray(questions) && questions.length > 0) {
+              console.log('✅ Generated quiz with Gemini API');
+              return questions;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Direct Gemini quiz generation failed', e);
+      }
+    }
+
     return null;
   } catch (e) {
     console.warn('generateQuizWithLLM error', e);

@@ -1,5 +1,15 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Clock, Users, Star } from "lucide-react";
@@ -16,6 +26,9 @@ interface SessionCardProps {
   sessionId?: string;
   onJoin?: (sessionId: string) => Promise<void> | void;
   onDetails?: () => void;
+  onDelete?: (sessionId: string) => Promise<void> | void;
+  onEdit?: (sessionId: string) => Promise<void> | void;
+  onViewAttendees?: (sessionId: string) => Promise<void> | void;
   isHost?: boolean;
   isJoined?: boolean;
 }
@@ -32,6 +45,7 @@ const SessionCard = ({
   sessionId,
   onJoin,
   onDetails,
+  onDelete,
   isHost,
   isJoined,
 }: SessionCardProps) => {
@@ -79,7 +93,38 @@ const SessionCard = ({
               </Button>
             )}
             {isHost && (
-              <Button className="flex-1" variant="outline">Host Controls</Button>
+              <div className="flex-1">
+                {/* Host controls dialog */}
+                <Dialog>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" className="w-full">Host Controls</Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Host Controls</DialogTitle>
+                      <DialogDescription>Manage this session. Deleting will remove it for all participants.</DialogDescription>
+                    </DialogHeader>
+                    <div className="mt-4 space-y-3">
+                      <div className="flex flex-col gap-2">
+                        <Button variant="destructive" onClick={() => { if (sessionId && onDelete) onDelete(sessionId); }}>
+                          Delete Session
+                        </Button>
+                        <Button variant="outline" onClick={() => { if (sessionId && onEdit) onEdit(sessionId); }}>
+                          Edit Session
+                        </Button>
+                        <Button variant="ghost" onClick={() => { if (sessionId && onViewAttendees) onViewAttendees(sessionId); }}>
+                          View Attendees
+                        </Button>
+                      </div>
+                    </div>
+                    <DialogFooter className="mt-4">
+                      <DialogClose asChild>
+                        <Button variant="outline">Close</Button>
+                      </DialogClose>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </div>
             )}
             <Button variant="outline" onClick={() => onDetails && onDetails()}>Details</Button>
           </div>

@@ -11,6 +11,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { sendReservationEmail } from '@/lib/email';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -43,6 +44,12 @@ const Schedule = () => {
   const [dialogTime, setDialogTime] = useState('');
   const [joinLink, setJoinLink] = useState('');
   const [form, setForm] = useState({ title: '', subject_id: '', date: '', time: '', duration: 30, capacity: 10 });
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [showAttendeesDialog, setShowAttendeesDialog] = useState(false);
+  const [attendees, setAttendees] = useState<Array<{ id: string; display_name?: string; full_name?: string; username?: string; email?: string }>>([]);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const isCreateValid = Boolean(form.subject_id && form.date && form.time);
 
@@ -279,6 +286,27 @@ const Schedule = () => {
         description: '',
         status: 'scheduled',
       };
+      // If editing, attempt to update instead of insert
+      if (editingSessionId) {
+        try {
+          const { data: updated, error: updateErr } = await supabase.from('sessions').update(payload as any).eq('id', editingSessionId).select();
+          if (updateErr) {
+            console.error('Supabase update error', updateErr);
+            showToast({ title: 'Unable to update', description: 'Could not update session on server. Changes saved locally.', variant: 'destructive' });
+            // update locally
+            setSessions(prev => (prev || []).map(s => s.id === editingSessionId ? { ...s, title: payload.title, duration: payload.duration_minutes, capacity: payload.capacity } : s));
+          } else {
+            showToast({ title: 'Session updated', description: 'Session was updated.' });
+          }
+        } catch (e) {
+          console.error('Update exception', e);
+        }
+        setEditingSessionId(null);
+        setShowCreateDialog(false);
+        setForm({ title: '', subject_id: '', date: '', time: '', duration: 30, capacity: 10 });
+        fetchSessions();
+        return;
+      }
       console.log("Final subjectId in payload:", subjectId); // This should be the UUID
       console.log("Final payload for Supabase insert:", payload);
 
@@ -345,6 +373,77 @@ const Schedule = () => {
       fetchSessions();
     } catch (err: any) {
       showToast({ title: 'Error', description: err?.message || String(err), variant: 'destructive' });
+    }
+  };
+
+  const handleEditSession = async (sessionId: string) => {
+    // Find session locally first
+    const s = sessions.find(s => String(s.id) === String(sessionId));
+    if (s) {
+      // Try to parse start_time if present
+      let date = '';
+      let time = '';
+      try {
+        const st = s.raw?.start_time || s.raw?.start || s.time;
+        if (st) {
+          const d = new Date(st);
+          if (!isNaN(d.getTime())) {
+            date = d.toISOString().slice(0,10);
+            time = d.toTimeString().slice(0,5);
+          }
+        }
+      } catch (e) {}
+
+      setForm({ title: s.title || '', subject_id: s.raw?.subject_id || s.subject || '', date, time, duration: s.duration || 30, capacity: s.capacity || 10 });
+      setEditingSessionId(String(sessionId));
+      setShowCreateDialog(true);
+      return;
+    }
+
+    // fallback: fetch from server
+    try {
+      const { data, error } = await supabase.from('sessions').select('*').eq('id', sessionId).maybeSingle();
+      if (!error && data) {
+        const st = data.start_time;
+        let date = '';
+        let time = '';
+        try {
+          const d = new Date(st);
+          if (!isNaN(d.getTime())) { date = d.toISOString().slice(0,10); time = d.toTimeString().slice(0,5); }
+        } catch (e) {}
+        setForm({ title: data.title || '', subject_id: data.subject_id || '', date, time, duration: data.duration_minutes || 30, capacity: data.capacity || 10 });
+        setEditingSessionId(String(sessionId));
+        setShowCreateDialog(true);
+      }
+    } catch (e) {
+      console.error('handleEditSession fetch error', e);
+    }
+  };
+
+  const handleViewAttendees = async (sessionId: string) => {
+    try {
+      // Try to fetch attendees via session_participants -> profiles
+      const { data } = await supabase.from('session_participants').select('user_id').eq('session_id', sessionId);
+      const uids = (data || []).map((r:any) => r.user_id).filter(Boolean);
+      if (uids.length === 0) {
+        setAttendees([]);
+        setShowAttendeesDialog(true);
+        return;
+      }
+      const { data: profiles } = await supabase.from('profiles').select('id,display_name,full_name,username,email').in('id', uids as any);
+      setAttendees((profiles as any) || []);
+      setShowAttendeesDialog(true);
+    } catch (e) {
+      console.error('handleViewAttendees error', e);
+      // fallback: try to get participants from session.raw if present
+      const s = sessions.find(s => String(s.id) === String(sessionId));
+      if (s && s.raw && Array.isArray(s.raw.participants)) {
+        setAttendees(s.raw.participants);
+        setShowAttendeesDialog(true);
+      } else {
+        setAttendees([]);
+        setShowAttendeesDialog(true);
+      }
     }
   };
 
@@ -422,6 +521,53 @@ const Schedule = () => {
     }
   };
 
+  const handleDeleteClick = (sessionId: string) => {
+    setSessionToDelete(sessionId);
+    setShowDeleteConfirm(true);
+  };
+
+  const handleDeleteSession = () => {
+    if (isDeleting) return; // Prevent double-clicks
+    
+    const sessionId = sessionToDelete;
+    if (!sessionId) return;
+    
+    setIsDeleting(true);
+    
+    // Use setTimeout to ensure state updates happen on next tick
+    setTimeout(() => {
+      setShowDeleteConfirm(false);
+      setSessionToDelete(null);
+      
+      // Remove from UI immediately
+      setSessions(prev => (prev || []).filter(s => s.id !== sessionId));
+      
+      if (String(sessionId).startsWith('local-')) {
+        showToast({ title: 'Session removed', description: 'Local session removed.' });
+        setIsDeleting(false);
+        return;
+      }
+      
+      // Delete from database without blocking
+      supabase.from('sessions').delete().eq('id', sessionId)
+        .then(({ error }) => {
+          if (error) {
+            console.error('delete session error', error);
+            showToast({ title: 'Deleted', description: 'Session removed from view.' });
+          } else {
+            showToast({ title: 'Success', description: 'Session permanently deleted.' });
+          }
+        })
+        .catch((e) => {
+          console.error('handleDeleteSession error', e);
+          showToast({ title: 'Deleted', description: 'Session removed from view.' });
+        })
+        .finally(() => {
+          setIsDeleting(false);
+        });
+    }, 0);
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <Navigation />
@@ -469,6 +615,9 @@ const Schedule = () => {
                     key={session.id}
                     sessionId={session.id}
                     onJoin={() => handleToggleReservation(session.id, session.isJoined, session)}
+                    onDelete={() => handleDeleteClick(session.id)}
+                    onEdit={() => handleEditSession(session.id)}
+                    onViewAttendees={() => handleViewAttendees(session.id)}
                     onDetails={() => { setSelectedSession(session); setShowSessionDialog(true); }}
                     isHost={session.isHost}
                     isJoined={session.isJoined}
@@ -506,11 +655,11 @@ const Schedule = () => {
           </TabsContent>
         </Tabs>
 
-        <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+        <Dialog open={showCreateDialog} onOpenChange={(open) => { setShowCreateDialog(open); if (!open) { setEditingSessionId(null); setForm({ title: '', subject_id: '', date: '', time: '', duration: 30, capacity: 10 }); } }}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Create Session</DialogTitle>
-              <DialogDescription>Provide session details and schedule it.</DialogDescription>
+                <DialogTitle>{editingSessionId ? 'Edit Session' : 'Create Session'}</DialogTitle>
+                <DialogDescription>{editingSessionId ? 'Modify session details and save changes.' : 'Provide session details and schedule it.'}</DialogDescription>
             </DialogHeader>
 
             <div className="grid gap-3">
@@ -560,7 +709,7 @@ const Schedule = () => {
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancel</Button>
                 <Button onClick={handleCreateSubmit} disabled={!isCreateValid}>
-                  Create Session
+                  {editingSessionId ? 'Update Session' : 'Create Session'}
                 </Button>
               </div>
               {!isCreateValid && (
@@ -593,6 +742,9 @@ const Schedule = () => {
                       subject={selectedSession.subject}
                       sessionId={selectedSession.id}
                       onJoin={() => handleToggleReservation(selectedSession.id, selectedSession.isJoined, selectedSession)}
+                      onDelete={() => handleDeleteClick(selectedSession.id)}
+                      onEdit={() => handleEditSession(selectedSession.id)}
+                      onViewAttendees={() => handleViewAttendees(selectedSession.id)}
                       isHost={selectedSession.isHost}
                       isJoined={selectedSession.isJoined}
                     />
@@ -641,6 +793,56 @@ const Schedule = () => {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <Dialog open={showAttendeesDialog} onOpenChange={setShowAttendeesDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Attendees</DialogTitle>
+              <DialogDescription>Participants who reserved this session</DialogDescription>
+            </DialogHeader>
+            <div className="mt-4 space-y-2">
+              {attendees && attendees.length > 0 ? (
+                attendees.map(a => (
+                  <div key={a.id} className="flex items-center gap-3 p-3 border rounded hover:bg-muted/50 transition-colors">
+                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold">{(a.display_name || a.full_name || a.username || 'U').charAt(0).toUpperCase()}</div>
+                    <div className="flex-1">
+                      <div className="font-medium">{a.display_name || a.full_name || a.username || 'User'}</div>
+                      {a.username && <div className="text-xs text-muted-foreground">@{a.username}</div>}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-center text-muted-foreground py-8">No attendees yet. Be the first to join!</div>
+              )}
+            </div>
+            <DialogFooter>
+              <div className="flex justify-end">
+                <Button variant="outline" onClick={() => setShowAttendeesDialog(false)}>Close</Button>
+              </div>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Session</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete this session? This action cannot be undone and all participants will lose access.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+              <Button 
+                onClick={() => handleDeleteSession()}
+                disabled={isDeleting}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {isDeleting ? 'Deleting...' : 'Delete'}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </div>
   );

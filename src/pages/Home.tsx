@@ -43,8 +43,8 @@ const Home = () => {
       icon: <Palette className="h-6 w-6" />,
     },
     {
-      title: "Physics",
-      category: "science" as const,
+      title: "Statistics",
+      category: "math" as const,
       nextSession: "Today 6:00 PM",
       activeUsers: 142,
       icon: <Target className="h-6 w-6" />,
@@ -89,13 +89,13 @@ const Home = () => {
             </p>
             
             <div className="flex flex-wrap gap-4 justify-center">
-              <Link to="/auth">
+              <Link to="/schedule">
                 <Button size="lg" className="gap-2">
                   Find Study Sessions
                   <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
-              <Link to="/auth">
+              <Link to="/schedule">
                 <Button size="lg" variant="outline">
                   Create a Room
                 </Button>

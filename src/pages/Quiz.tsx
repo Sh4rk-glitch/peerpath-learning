@@ -98,21 +98,23 @@ const Quiz = () => {
           {mode === 'running' && (
             <>
               <div className="text-sm text-muted-foreground mb-4">Time: {Math.floor(secondsElapsed / 60).toString().padStart(2,'0')}:{(secondsElapsed%60).toString().padStart(2,'0')}</div>
-              {questions.map((q, i) => (
-                <div key={i} className="mb-6">
-                  <div className="mb-2 font-medium">{i + 1}. {q.question}</div>
-                  <div className="grid gap-2">
-                    {q.choices.map((c: string, ci: number) => (
-                      <label key={ci} className={`p-2 border rounded ${answers[i] === ci ? 'bg-primary/10' : ''}`}>
-                        <input type="radio" name={`q-${i}`} checked={answers[i] === ci} onChange={() => setAnswers(a => ({ ...a, [i]: ci }))} />
-                        <span className="ml-2">{c}</span>
-                      </label>
-                    ))}
+              <div className="space-y-6 max-w-4xl mx-auto">
+                {questions.map((q, i) => (
+                  <div key={i} className="mb-6 p-4 border rounded-lg bg-card">
+                    <div className="mb-3 font-medium text-base leading-relaxed break-words whitespace-pre-wrap">{i + 1}. {q.question}</div>
+                    <div className="grid gap-2">
+                      {q.choices.map((c: string, ci: number) => (
+                        <label key={ci} className={`p-3 border rounded cursor-pointer transition-colors hover:bg-muted/50 flex items-start gap-2 ${answers[i] === ci ? 'bg-primary/10 border-primary' : ''}`}>
+                          <input type="radio" name={`q-${i}`} checked={answers[i] === ci} onChange={() => setAnswers(a => ({ ...a, [i]: ci }))} className="mt-1 flex-shrink-0" />
+                          <span className="break-words whitespace-normal leading-relaxed">{c}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
 
-              <div className="flex gap-2 justify-end">
+              <div className="flex gap-2 justify-end mt-6">
                 <Button variant="outline" onClick={() => { setMode('choose'); setQuestions([]); }}>Cancel</Button>
                 <Button onClick={submit}>Submit Quiz</Button>
               </div>
@@ -120,9 +122,9 @@ const Quiz = () => {
           )}
 
           {mode === 'finished' && (
-            <div>
-              <div className="text-center mb-4">
-                <div className="text-2xl font-semibold">Score: {score}%</div>
+            <div className="max-w-4xl mx-auto">
+              <div className="text-center mb-6">
+                <div className="text-3xl font-semibold mb-2">Score: {score}%</div>
                 <div className="text-sm text-muted-foreground">Time: {Math.floor(secondsElapsed / 60).toString().padStart(2,'0')}:{(secondsElapsed%60).toString().padStart(2,'0')}</div>
               </div>
 
@@ -134,12 +136,12 @@ const Quiz = () => {
                   const selected = typeof userIdx === 'number' ? q.choices[userIdx] : null;
                   const correctFlag = userIdx === correctIdx;
                   return (
-                    <div key={i} className="p-4 border rounded">
-                      <div className="font-medium mb-2">{i + 1}. {q.question}</div>
-                      <div className="mb-2">Your answer: <strong>{selected ?? '—'}</strong></div>
-                      <div className="mb-2">Correct answer: <strong>{correct}</strong></div>
-                      <div className={`p-2 rounded ${correctFlag ? 'bg-green-50' : 'bg-red-50'}`}>
-                        <div className="text-sm">{q.explanation}</div>
+                    <div key={i} className="p-4 border rounded-lg bg-card">
+                      <div className="font-medium mb-3 text-base leading-relaxed break-words whitespace-pre-wrap">{i + 1}. {q.question}</div>
+                      <div className="mb-2 break-words">Your answer: <strong className="text-base">{selected ?? '—'}</strong></div>
+                      <div className="mb-3 break-words">Correct answer: <strong className="text-base">{correct}</strong></div>
+                      <div className={`p-3 rounded ${correctFlag ? 'bg-green-50 dark:bg-green-950/30' : 'bg-red-50 dark:bg-red-950/30'}`}>
+                        <div className="text-sm leading-relaxed break-words whitespace-pre-wrap">{q.explanation}</div>
                       </div>
                     </div>
                   );

@@ -1,6 +1,6 @@
 import Navigation from "@/components/Navigation";
 import SubjectCard from "@/components/SubjectCard";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
 import lessonGen from "@/lib/lessonGenerator";
@@ -100,6 +100,9 @@ const Subjects = () => {
 
   const { slug } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const q = new URLSearchParams(location.search);
+  const searchQuery = q.get('search') || '';
   const { user } = useAuth();
   const { toast } = useToast();
 
@@ -173,10 +176,23 @@ const Subjects = () => {
         </div>
 
         {!selected && (
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {allSubjects.map((subject) => (
-              <SubjectCard key={subject.title} {...subject} />
-            ))}
+          <div>
+            {searchQuery ? (
+              <div>
+                <h3 className="mb-4">Search results for "{searchQuery}"</h3>
+                <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {allSubjects.filter(s => s.title.toLowerCase().includes(searchQuery.toLowerCase())).map((subject) => (
+                    <SubjectCard key={subject.title} {...subject} />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {allSubjects.map((subject) => (
+                  <SubjectCard key={subject.title} {...subject} />
+                ))}
+              </div>
+            )}
           </div>
         )}
 

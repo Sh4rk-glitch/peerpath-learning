@@ -1,6 +1,6 @@
 // Supabase Edge Function: generate_quiz (Gemini/Google Generative API)
 // Accepts: { lesson: { title, content }, count: number }
-// Requires secrets: GEMINI_API_KEY, GEMINI_MODEL (e.g. "models/text-bison-001")
+// Requires secrets: GEMINI_API_KEY, GEMINI_MODEL
 
 export default async (req: Request) => {
   try {
@@ -9,19 +9,24 @@ export default async (req: Request) => {
     const count = Number(body.count) || 5;
 
     const GEMINI = Deno.env.get('GEMINI_API_KEY');
-    const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') || 'models/text-bison-001';
+    const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') || 'gemini-pro';
     if (!GEMINI) return new Response(JSON.stringify({ error: 'Missing GEMINI_API_KEY' }), { status: 500 });
 
     const prompt = `You are a helpful assistant that generates multiple-choice quizzes from a lesson text.\n` +
-      `Respond with valid JSON only: an array of objects. Each object must have: question (string), choices (array of 3-5 unique strings), answerIndex (0-based integer index into choices), explanation (string briefly explaining correct answer). Do not include additional commentary.\n\n` +
+      `Respond with valid JSON only: an array of objects. Each object must have: question (string), choices (array of 4 unique strings), answerIndex (0-based integer index into choices), explanation (string briefly explaining correct answer). Do not include additional commentary.\n\n` +
       `Lesson title: ${lesson?.title || ''}\n\nContent:\n${lesson?.content || ''}\n\nGenerate ${count} questions. Make distractors plausible and avoid repeating near-duplicates. Return JSON array.`;
 
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta2/${GEMINI_MODEL}:generateText`;
+    // Use Gemini 1.5 API endpoint
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
     const payload = {
-      prompt: { text: prompt },
-      temperature: 0.7,
-      maxOutputTokens: 1024,
-    } as any;
+      contents: [{
+        parts: [{ text: prompt }]
+      }],
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 2048,
+      }
+    };
 
     // Use a fetch wrapper with timeout to avoid hanging indefinitely
     const fetchWithTimeout = async (url: string, opts: any = {}, timeout = 20000) => {
@@ -58,13 +63,15 @@ export default async (req: Request) => {
       return new Response(JSON.stringify({ error: 'Gemini request failed', details: txt }), { status: 502 });
     }
 
-    // Try to extract model output text in a few possible shapes
+    // Try to extract model output text from Gemini 1.5 response format
     let output = '';
     try {
       const parsed = JSON.parse(txt);
-      if (parsed?.candidates && parsed.candidates[0]?.output) {
+      if (parsed?.candidates?.[0]?.content?.parts?.[0]?.text) {
+        output = parsed.candidates[0].content.parts[0].text;
+      } else if (parsed?.candidates?.[0]?.output) {
         output = parsed.candidates[0].output;
-      } else if (parsed?.candidates && parsed.candidates[0]?.content) {
+      } else if (parsed?.candidates?.[0]?.content) {
         output = parsed.candidates[0].content;
       } else if (parsed?.output && Array.isArray(parsed.output)) {
         output = parsed.output.map((o: any) => o?.content || o?.output || '').join('\n');
