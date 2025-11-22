@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import Navigation from "@/components/Navigation";
 import SessionCard from "@/components/SessionCard";
 import { Button } from "@/components/ui/button";
@@ -9,112 +9,400 @@ import { Calendar, Plus, Clock } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import { sendReservationEmail } from '@/lib/email';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const allSubjects = [
-  { id: 'ap-biology', title: 'AP Biology' },
-  { id: 'chemistry', title: 'Chemistry' },
-  { id: 'calculus', title: 'Calculus' },
-  { id: 'spanish', title: 'Spanish' },
-  { id: 'digital-art', title: 'Digital Art' },
+  { id: 'ap-biology', title: 'AP Biology', name: 'AP Biology' },
+  { id: 'chemistry', title: 'Chemistry', name: 'Chemistry' },
+  { id: 'calculus', title: 'Calculus', name: 'Calculus' },
+  { id: 'spanish', title: 'Spanish', name: 'Spanish' },
+  { id: 'digital-art', title: 'Digital Art', name: 'Digital Art' },
 ];
 
 const Schedule = () => {
+  // types
+  type SubjectItem = { id?: string; title?: string; name?: string; category?: string; color_accent?: string };
+  type UISession = { id: string; title: string; host: string; hostRating?: number; time: string; duration: number; capacity: number; spotsLeft: number; subject: string; raw?: any; isHost?: boolean; isJoined?: boolean; hostId?: string };
+
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, loading } = useAuth();
-  const toast = useToast();
+  const { toast: showToast } = useToast();
 
   const [sessions, setSessions] = useState<any[]>([]);
-  const [subjectsList, setSubjectsList] = useState<any[]>([]);
-  const [subjectFilter, setSubjectFilter] = useState<string>('');
+  const [subjectsList, setSubjectsList] = useState<SubjectItem[]>(allSubjects as SubjectItem[]);
+  const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showSessionDialog, setShowSessionDialog] = useState(false);
-  const [selectedSession, setSelectedSession] = useState<any | null>(null);
+  const [selectedSession, setSelectedSession] = useState<UISession | null>(null);
   const [dialogDate, setDialogDate] = useState('');
   const [dialogTime, setDialogTime] = useState('');
   const [joinLink, setJoinLink] = useState('');
   const [form, setForm] = useState({ title: '', subject_id: '', date: '', time: '', duration: 30, capacity: 10 });
 
+  const isCreateValid = Boolean(form.subject_id && form.date && form.time);
+
   const fetchSessions = async () => {
     try {
       const { data } = await supabase.from('sessions').select('*');
-      setSessions(data || []);
+      const rows = (data as any) || [];
+
+      // attempt to resolve host display names by querying profiles if possible
+      const hostIds = Array.from(new Set(rows.map((r: any) => r.host_id).filter(Boolean)));
+      let profileMap: Record<string, string> = {};
+      if (hostIds.length > 0) {
+        try {
+          const { data: profiles, error: pErr } = await supabase.from('profiles').select('id,display_name,full_name').in('id', hostIds as any);
+          if (!pErr && profiles) {
+            (profiles as any).forEach((p: any) => {
+              profileMap[p.id] = p.display_name || p.full_name || '';
+            });
+          }
+        } catch (e) {
+          console.warn('Could not fetch profiles for host names', e);
+        }
+      }
+
+      let mapped = rows.map((s: any) => {
+        const start = s.start_time ? new Date(s.start_time) : new Date();
+        const hostLabel = (s.host_name ?? (s.host_id ? profileMap[s.host_id] : null) ?? s.host ?? 'Host');
+        return {
+          id: s.id,
+          title: s.title || 'Session',
+          host: hostLabel,
+          hostId: s.host_id,
+          hostRating: s.host_rating ?? 4.5,
+          time: start.toLocaleString(),
+          duration: s.duration_minutes ?? 30,
+          capacity: s.capacity ?? 10,
+          spotsLeft: (s.capacity ?? 10) - (s.participants_count ?? 0),
+          subject: s.subjects?.name ?? s.subject_id ?? 'General',
+          raw: s,
+        } as any;
+      });
+
+      // mark joined sessions for current user if session_participants table exists
+      if (user) {
+        try {
+          const { data: parts, error: pErr } = await supabase.from('session_participants').select('session_id').eq('user_id', user.id);
+          if (!pErr && parts) {
+            const joined = new Set((parts as any).map((p: any) => p.session_id));
+            mapped = mapped.map((m: any) => ({ ...m, isJoined: joined.has(m.id) }));
+          }
+        } catch (e) {
+          // table likely missing or permission denied; ignore and leave isJoined undefined
+          console.warn('Could not fetch session_participants', e);
+        }
+      }
+
+      // mark host flag
+      mapped = mapped.map((m: any) => ({ ...m, isHost: Boolean(user && m.hostId && String(m.hostId) === String(user.id)) }));
+
+      setSessions(mapped || []);
     } catch (e) {
-      // ignore
+      console.error('fetchSessions error', e);
     }
   };
 
   const fetchSubjects = async () => {
     try {
-      const { data } = await supabase.from('subjects').select('id,name');
-      if (data && data.length) setSubjectsList(data as any);
-      else setSubjectsList(allSubjects as any);
+      const { data, error, status } = await supabase.from('subjects').select('*');
+      if (error) {
+        console.error('fetchSubjects supabase error', error);
+        // If permission denied (403), notify user and keep local fallback
+        if ((error as any)?.status === 403 || status === 403) {
+          showToast({ title: 'Unable to load subjects', description: 'Permission denied reading subjects from Supabase. Using local fallback list.', variant: 'destructive' });
+        } else {
+          showToast({ title: 'Unable to load subjects', description: error.message || String(error), variant: 'destructive' });
+        }
+        return;
+      }
+
+      if (data && (data as any).length) setSubjectsList((data as any) as SubjectItem[]);
     } catch (e) {
-      setSubjectsList(allSubjects as any);
+      console.error('fetchSubjects error', e);
+      showToast({ title: 'Unable to load subjects', description: 'An unexpected error occurred; using local fallback subjects.', variant: 'destructive' });
     }
   };
 
   useEffect(() => {
     fetchSessions();
     fetchSubjects();
-  }, []);
+    const q = new URLSearchParams(location.search);
+    const openCreate = q.get('openCreate');
+    const subjectFromQuery = q.get('subject');
+    if (openCreate === '1') setShowCreateDialog(true);
+    if (subjectFromQuery) setForm(f => ({ ...f, subject_id: subjectFromQuery }));
+  }, [location.search]);
 
-  const filteredSessions = subjectFilter ? sessions.filter(s => s.subject_id === subjectFilter || s.subject === subjectFilter) : sessions;
+  // when auth state changes (user logs in/out), refresh sessions so isHost/isJoined flags update
+  useEffect(() => {
+    fetchSessions();
+  }, [user]);
+
+  const filteredSessions = subjectFilter && subjectFilter !== 'all' ? sessions.filter((s: any) => s.subject_id === subjectFilter || s.subject === subjectFilter) : sessions;
 
   const handleCreateDialogOpen = (prefillSubjectId?: string) => {
-    setForm(f => ({ ...f, subject_id: prefillSubjectId || f.subject_id }));
+    if (prefillSubjectId) setForm(f => ({ ...f, subject_id: prefillSubjectId }));
     setShowCreateDialog(true);
   };
 
   const handleCreateSubmit = async () => {
-    if (!user) { navigate('/auth'); return; }
+    if (!user) {
+      navigate('/auth');
+      return;
+    }
     try {
-      const subjectId = form.subject_id || (subjectsList && subjectsList[0] && (subjectsList[0].id || subjectsList[0].title)) || null;
-      if (!subjectId) { toast({ title: 'No subject selected', description: 'Please select a subject', variant: 'destructive' }); return; }
+      const selectedSubject = subjectsList.find((s: SubjectItem) => s.id === form.subject_id || s.title === form.subject_id);
+      let subjectIdCandidate = selectedSubject?.id || (subjectsList.length > 0 ? subjectsList[0].id : null);
+      let subjectName = selectedSubject?.name || selectedSubject?.title || (subjectsList.length > 0 ? subjectsList[0].name : null);
+
+      // Ensure we have a UUID for subject_id. If the candidate isn't a UUID, try to find or create the subject in the DB.
+      const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+      let subjectId: string | null = null;
+      let permissionDenied = false;
+      if (subjectIdCandidate && uuidRegex.test(String(subjectIdCandidate))) {
+        subjectId = String(subjectIdCandidate);
+      } else {
+        // try to find subject by title or name in DB
+        try {
+          const lookupName = subjectName || String(subjectIdCandidate || '').replace(/-/g, ' ');
+          if (lookupName) {
+            // Try case-insensitive lookup by name, then title
+            let found: any = null;
+            try {
+              const { data: f1, error: findErr, status: findStatus } = await supabase.from('subjects').select('id,name,title').ilike('name', lookupName).maybeSingle();
+              if (findErr) {
+                console.error('Subject lookup error (name)', findErr);
+                // treat any lookup error as a permission/availability issue and fallback
+                permissionDenied = true;
+                showToast({ title: 'Unable to lookup subjects', description: 'Could not lookup subjects from Supabase. Will create session locally.', variant: 'destructive' });
+              }
+              if (f1 && (f1 as any).id) found = f1;
+            } catch (e) {
+              console.error('Subject lookup exception (name)', e);
+              permissionDenied = true;
+              showToast({ title: 'Unable to lookup subjects', description: 'Could not lookup subjects from Supabase. Will create session locally.', variant: 'destructive' });
+            }
+
+            if (!found) {
+              try {
+                const { data: f2, error: findErr2, status: findStatus2 } = await supabase.from('subjects').select('id,name,title').ilike('title', lookupName).maybeSingle();
+                if (findErr2) {
+                  console.error('Subject lookup error (title)', findErr2);
+                  permissionDenied = true;
+                  showToast({ title: 'Unable to lookup subjects', description: 'Could not lookup subjects from Supabase. Will create session locally.', variant: 'destructive' });
+                }
+                if (f2 && (f2 as any).id) found = f2;
+              } catch (e) {
+                console.error('Subject lookup exception (title)', e);
+              }
+            }
+
+            if (found && (found as any).id) {
+              subjectId = (found as any).id;
+              subjectName = (found as any).name || (found as any).title || subjectName;
+            } else {
+              // create subject row and use returned id; subjects table requires category and color_accent
+              const { data: created, error: createErr, status: createStatus } = await supabase.from('subjects').insert({ name: lookupName, category: 'general', color_accent: '180 60% 45%' }).select().maybeSingle();
+              if (createErr) {
+                console.error('Subject create error', createErr);
+                // treat any create error as permission/availability issue and fallback
+                permissionDenied = true;
+                showToast({ title: 'Unable to create subject', description: 'Could not create subject in Supabase. Will create session locally.', variant: 'destructive' });
+              }
+              if (!createErr && created && (created as any).id) {
+                subjectId = (created as any).id;
+                subjectName = (created as any).name || (created as any).title || subjectName;
+                // add to local subjects list for future
+                setSubjectsList((prev: any[]) => [ ...(prev || []), created ]);
+              }
+            }
+          }
+        } catch (e) {
+          console.error('Subject lookup/create error', e);
+        }
+      }
+
+      if (!subjectId) {
+        if (permissionDenied) {
+          // fallback: create a local-only session so the UI behaves as if a session was created
+          const localId = `local-${Math.random().toString(36).slice(2, 9)}`;
+          const startLocal = form.date && form.time ? new Date(`${form.date}T${form.time}`) : new Date(Date.now() + 60 * 60 * 1000);
+          const localSession: UISession = {
+            id: localId,
+            title: form.title || `Local Session by ${user.user_metadata?.full_name || user.email}`,
+            host: user.user_metadata?.full_name || user.email,
+            hostRating: 4.5,
+            time: startLocal.toLocaleString(),
+            duration: form.duration,
+            capacity: form.capacity,
+            spotsLeft: form.capacity,
+            subject: subjectName || 'General',
+            raw: { local: true },
+          };
+          setSessions(prev => [localSession as any, ...(prev || [])]);
+          // Do not auto-open the dialog. Generate a meeting link and notify the user.
+          const slug = localId.slice(0, 8);
+          const userPart = user.id ? String(user.id).slice(0, 6) : 'guest';
+          const link = `https://meet.google.com/lookup/${slug}-${userPart}`;
+          setJoinLink(link);
+          setSelectedSession(localSession as any);
+          setShowCreateDialog(false);
+          setForm({ title: '', subject_id: '', date: '', time: '', duration: 30, capacity: 10 });
+          try { navigator?.clipboard?.writeText(link); } catch (e) { /* ignore */ }
+          showToast({ title: 'Created locally', description: 'Session created locally. Meeting link generated and saved.' });
+          return;
+        }
+
+        showToast({ title: 'Invalid subject', description: 'Could not resolve subject to a valid id.', variant: 'destructive' });
+        return;
+      }
 
       let start = new Date(Date.now() + 60 * 60 * 1000);
       if (form.date && form.time) start = new Date(`${form.date}T${form.time}`);
 
-      const payload: any = {
+      type SessionFormat = 'lecture' | 'discussion' | 'problem_solving' | 'review';
+
+      const payload = {
         title: form.title || `Session by ${user.user_metadata?.full_name || user.email}`,
-        subject_id: subjectId,
+        subject_id: subjectId, // UUID from subjects table
         host_id: user.id,
-        host_name: user.user_metadata?.full_name || user.email,
         start_time: start.toISOString(),
         duration_minutes: form.duration,
         capacity: form.capacity,
-        format: 'discussion',
+        format: 'discussion' as SessionFormat,
         description: '',
         status: 'scheduled',
       };
+      console.log("Final subjectId in payload:", subjectId); // This should be the UUID
+      console.log("Final payload for Supabase insert:", payload);
 
-      const { data, error } = await supabase.from('sessions').insert(payload).select();
-      if (error) throw error;
+      const { data, error } = await supabase.from('sessions').insert(payload as any).select();
+      if (error) {
+        console.error("Supabase insert error:", JSON.stringify(error, null, 2)); // Log detailed error
+        // treat any insert error as permission/availability issue and fallback to local-only session
+        const localId = `local-${Math.random().toString(36).slice(2, 9)}`;
+        const startLocal = form.date && form.time ? new Date(`${form.date}T${form.time}`) : new Date(Date.now() + 60 * 60 * 1000);
+        const localSession: UISession = {
+          id: localId,
+          title: payload.title,
+          host: user.user_metadata?.full_name || user.email,
+          hostRating: 4.5,
+          time: startLocal.toLocaleString(),
+          duration: payload.duration_minutes,
+          capacity: payload.capacity,
+          spotsLeft: payload.capacity,
+          subject: subjectName || 'General',
+          raw: { local: true },
+        };
+        setSessions(prev => [localSession as any, ...(prev || [])]);
+        // Do not auto-open the dialog. Generate a meeting link and notify the user.
+        const slug = localId.slice(0, 8);
+        const userPart = user.id ? String(user.id).slice(0, 6) : 'guest';
+        const link = `https://meet.google.com/lookup/${slug}-${userPart}`;
+        setJoinLink(link);
+        setSelectedSession(localSession as any);
+        setShowCreateDialog(false);
+        setForm({ title: '', subject_id: '', date: '', time: '', duration: 30, capacity: 10 });
+        try { navigator?.clipboard?.writeText(link); } catch (e) { /* ignore */ }
+        showToast({ title: 'Created locally', description: 'Session created locally because Supabase prevented saving. Meeting link generated.' });
+      }
+
       setShowCreateDialog(false);
       setForm({ title: '', subject_id: '', date: '', time: '', duration: 30, capacity: 10 });
       if (data && data[0]) {
-        setSelectedSession(data[0]);
-        setShowSessionDialog(true);
-        toast({ title: 'Session created', description: `Session "${data[0].title}" created.` });
-      } else toast({ title: 'Session created', description: 'Your session was created.' });
+        // map to UI session shape
+        const s = data[0] as any;
+        const start2 = s.start_time ? new Date(s.start_time) : new Date();
+        const uiSession: UISession = {
+          id: s.id,
+          title: s.title,
+          host: s.host_name ?? s.host_id ?? (user.user_metadata?.full_name ?? user.email),
+          hostRating: s.host_rating ?? 4.5,
+          time: start2.toLocaleString(),
+          duration: s.duration_minutes ?? 30,
+          capacity: s.capacity ?? 10,
+          spotsLeft: s.capacity ?? 10,
+          subject: subjectName || (s.subjects?.name ?? s.subject_id ?? 'General'),
+          raw: s,
+        };
+
+        // Do not auto-open the dialog. Generate a meeting link and notify the user.
+        const slug = String(s.id).slice(0, 8);
+        const userPart = user.id ? String(user.id).slice(0, 6) : 'guest';
+        const link = `https://meet.google.com/lookup/${slug}-${userPart}`;
+        setJoinLink(link);
+        setSelectedSession(uiSession as any);
+        showToast({ title: 'Session created', description: `Session "${s.title}" created. Meeting link generated.` });
+      } else {
+        showToast({ title: 'Session created', description: 'Your session was created.' });
+      }
       fetchSessions();
     } catch (err: any) {
-      toast({ title: 'Error', description: err?.message || String(err), variant: 'destructive' });
+      showToast({ title: 'Error', description: err?.message || String(err), variant: 'destructive' });
     }
   };
 
-  const handleJoin = async (sessionId: string) => {
+  const handleToggleReservation = async (sessionId: string, isJoined?: boolean, sessionObj?: any) => {
     if (!user) { navigate('/auth'); return; }
     try {
-      const { error } = await supabase.from('session_participants').insert({ session_id: sessionId, user_id: user.id });
-      if (error) throw error;
-      toast({ title: 'Joined', description: 'You joined the session.' });
+      if (isJoined) {
+        // remove reservation
+        try {
+          const { error } = await supabase.from('session_participants').delete().match({ session_id: sessionId, user_id: user.id });
+          if (error) throw error;
+          showToast({ title: 'Reservation cancelled', description: 'You removed your reservation.' });
+          setSessions(prev => (prev || []).map(s => s.id === sessionId ? { ...s, isJoined: false, spotsLeft: Math.min((s.capacity ?? 10), (s.spotsLeft ?? (s.capacity ?? 10)) + 1) } : s));
+        } catch (e: any) {
+          // fallback when table missing / permission denied
+          console.warn('Unable to delete participant row', e);
+          setSessions(prev => (prev || []).map(s => s.id === sessionId ? { ...s, isJoined: false, spotsLeft: Math.min((s.capacity ?? 10), (s.spotsLeft ?? (s.capacity ?? 10)) + 1) } : s));
+          showToast({ title: 'Reservation removed locally', description: 'Could not persist cancellation to server.' });
+        }
+      } else {
+        // add reservation
+        try {
+          const { error } = await supabase.from('session_participants').insert({ session_id: sessionId, user_id: user.id });
+          if (error) throw error;
+          showToast({ title: 'Reserved', description: 'You joined the session. Confirmation email sent.' });
+          setSessions(prev => (prev || []).map(s => s.id === sessionId ? { ...s, isJoined: true, spotsLeft: Math.max(0, (s.spotsLeft ?? (s.capacity ?? 10)) - 1) } : s));
+        } catch (e: any) {
+          console.warn('Unable to insert participant row', e);
+          setSessions(prev => (prev || []).map(s => s.id === sessionId ? { ...s, isJoined: true, spotsLeft: Math.max(0, (s.spotsLeft ?? (s.capacity ?? 10)) - 1) } : s));
+          showToast({ title: 'Reserved locally', description: 'Could not persist reservation to server.' });
+        }
+
+        // send confirmation email via mailto fallback (client-side)
+        try {
+          const sess = sessionObj || sessions.find((s:any) => s.id === sessionId);
+          // attempt to send server email using Edge Function (SendGrid). Falls back to mailto if unavailable.
+          const sent = await sendReservationEmail(sess, user.email || '');
+          if (!sent) {
+            // fallback to mailto UI so user can send themselves the confirmation
+            const meetingLink = sess?.raw?.meet_link || `https://meet.google.com/lookup/${String(sessionId).slice(0, 8)}`;
+            const when = sess?.raw?.start_time ? new Date(sess.raw.start_time).toLocaleString() : sess?.time || '';
+            const host = sess?.host || '';
+            const subj = encodeURIComponent(`You joined: ${sess?.title || 'Session'}`);
+            const body = encodeURIComponent(`Hi ${user.user_metadata?.full_name || user.email},\n\nYou have joined the session "${sess?.title}" hosted by ${host}.\n\nWhen: ${when}\n\nMeeting link: ${meetingLink}\n\nSee you there!`);
+            const mailto = `mailto:${encodeURIComponent(user.email || '')}?subject=${subj}&body=${body}`;
+            window.open(mailto);
+          } else {
+            showToast({ title: 'Confirmation sent', description: 'A confirmation email was sent to your inbox.' });
+          }
+        } catch (e) {
+          console.warn('Unable to send confirmation email', e);
+        }
+      }
+
+      // refresh sessions list if possible
       fetchSessions();
     } catch (err: any) {
-      toast({ title: 'Error joining session', description: err?.message || String(err), variant: 'destructive' });
+      showToast({ title: 'Error', description: err?.message || String(err), variant: 'destructive' });
     }
   };
 
@@ -122,19 +410,15 @@ const Schedule = () => {
     if (!user) { navigate('/auth'); return; }
     try {
       if (session) {
-        const { error } = await supabase.from('session_participants').insert({ session_id: session.id, user_id: user.id });
-        if (error) throw error;
+        await handleToggleReservation(session.id, session.isJoined, session);
       }
-      let meetingTime = new Date().toISOString();
-      if (session && session.start_time) meetingTime = new Date(session.start_time).toISOString();
-      else if (dialogDate && dialogTime) meetingTime = new Date(`${dialogDate}T${dialogTime}`).toISOString();
-      const slug = session ? String(session.id).slice(0, 8) : Math.random().toString(36).slice(2, 10);
-      const userPart = user.id ? String(user.id).slice(0, 6) : 'guest';
-      const link = `https://meet.google.com/lookup/${slug}-${userPart}`;
-      setJoinLink(link);
-      toast({ title: 'Joined', description: 'Session joined. Placeholder meeting link generated.' });
+      // ensure joinLink is present
+      if (session) {
+        const link = session.raw?.meet_link || `https://meet.google.com/lookup/${String(session.id).slice(0, 8)}`;
+        setJoinLink(link);
+      }
     } catch (err: any) {
-      toast({ title: 'Error joining session', description: err?.message || String(err), variant: 'destructive' });
+      showToast({ title: 'Error', description: err?.message || String(err), variant: 'destructive' });
     }
   };
 
@@ -153,18 +437,21 @@ const Schedule = () => {
           </Button>
         </div>
 
-        <div className="flex justify-center mb-6">
+        <div className="flex justify-center mb-6 gap-2">
           <Select value={subjectFilter} onValueChange={v => setSubjectFilter(v)}>
             <SelectTrigger className="w-64">
-              <SelectValue>{subjectFilter ? (subjectsList.find((s:any) => s.id === subjectFilter)?.name || subjectFilter) : 'All Subjects'}</SelectValue>
+              <SelectValue>{subjectFilter && subjectFilter !== 'all' ? (subjectsList.find((s:any) => s.id === subjectFilter)?.name || subjectFilter) : 'All Subjects'}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All Subjects</SelectItem>
+              <SelectItem value="all">All Subjects</SelectItem>
               {(subjectsList || allSubjects).map((s: any, i: number) => (
                 <SelectItem key={s.id || i} value={s.id || s.title}>{s.name || s.title}</SelectItem>
               ))}
             </SelectContent>
           </Select>
+          {subjectFilter && subjectFilter !== 'all' && (
+            <Button onClick={() => handleCreateDialogOpen(subjectFilter)}>Create Session for {subjectsList.find((s:any) => s.id === subjectFilter)?.name || subjectFilter}</Button>
+          )}
         </div>
 
         <Tabs defaultValue="upcoming" className="space-y-6">
@@ -178,7 +465,15 @@ const Schedule = () => {
             {filteredSessions.length > 0 ? (
               <div className="grid gap-6 md:grid-cols-2">
                 {filteredSessions.map((session) => (
-                  <SessionCard key={session.id} sessionId={session.id} onJoin={handleJoin} {...session} />
+                  <SessionCard
+                    key={session.id}
+                    sessionId={session.id}
+                    onJoin={() => handleToggleReservation(session.id, session.isJoined, session)}
+                    onDetails={() => { setSelectedSession(session); setShowSessionDialog(true); }}
+                    isHost={session.isHost}
+                    isJoined={session.isJoined}
+                    {...session}
+                  />
                 ))}
               </div>
             ) : (
@@ -228,7 +523,7 @@ const Schedule = () => {
                 <Label>Subject</Label>
                 <Select onValueChange={(v:any) => setForm((f:any) => ({ ...f, subject_id: v }))}>
                   <SelectTrigger>
-                    <SelectValue>{subjectsList.find((s:any) => s.id === form.subject_id)?.name || 'Select a subject'}</SelectValue>
+                    <SelectValue>{subjectsList.find((s:any) => s.id === form.subject_id)?.name || subjectsList.find((s:any) => s.title === form.subject_id)?.title || 'Select a subject'}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {(subjectsList || allSubjects).map((s: any, i: number) => (
@@ -261,11 +556,16 @@ const Schedule = () => {
               </div>
             </div>
 
-            <DialogFooter>
+            <DialogFooter className="mt-4">
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancel</Button>
-                <Button onClick={handleCreateSubmit}>Create Session</Button>
+                <Button onClick={handleCreateSubmit} disabled={!isCreateValid}>
+                  Create Session
+                </Button>
               </div>
+              {!isCreateValid && (
+                <div className="text-xs text-muted-foreground mt-2">Please select a subject, date, and time.</div>
+              )}
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -274,35 +574,59 @@ const Schedule = () => {
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{selectedSession ? selectedSession.title : 'Live Session'}</DialogTitle>
-              <DialogDescription>{selectedSession ? `Hosted by ${selectedSession.host_name}` : 'Preview session'}</DialogDescription>
+              <DialogDescription>{selectedSession ? `Hosted by ${selectedSession.host}` : 'Preview session'}</DialogDescription>
             </DialogHeader>
 
-            <div className="mt-4 space-y-3">
-              <div className="grid grid-cols-2 gap-2">
+            <div className="mt-4 space-y-3 w-full">
+              {selectedSession ? (
                 <div>
-                  <Label>Subject</Label>
-                  <div className="p-2 border rounded">{selectedSession ? (selectedSession.subjects?.name || selectedSession.subject_id) : 'N/A'}</div>
-                </div>
-                <div>
-                  <Label>Date</Label>
-                  <Input type="date" value={dialogDate} onChange={(e:any) => setDialogDate(e.target.value)} />
-                </div>
-                <div>
-                  <Label>Time</Label>
-                  <Input type="time" value={dialogTime} onChange={(e:any) => setDialogTime(e.target.value)} />
-                </div>
-              </div>
+                  {/* Render a preview card and details */}
+                  <div className="mb-4">
+                    <SessionCard
+                      title={selectedSession.title}
+                      host={selectedSession.host}
+                      hostRating={selectedSession.hostRating ?? 4.5}
+                      time={selectedSession.time}
+                      duration={selectedSession.duration}
+                      capacity={selectedSession.capacity}
+                      spotsLeft={selectedSession.spotsLeft}
+                      subject={selectedSession.subject}
+                      sessionId={selectedSession.id}
+                      onJoin={() => handleToggleReservation(selectedSession.id, selectedSession.isJoined, selectedSession)}
+                      isHost={selectedSession.isHost}
+                      isJoined={selectedSession.isJoined}
+                    />
+                  </div>
 
-              <div>
-                <Label>Description</Label>
-                <div className="p-2 border rounded text-sm text-muted-foreground">{selectedSession ? (selectedSession.format || 'Discussion session') : 'Placeholder session for this subject.'}</div>
-              </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label>Subject</Label>
+                      <div className="p-2 border rounded">{selectedSession.subject}</div>
+                    </div>
+                    <div>
+                      <Label>Date</Label>
+                      <Input type="date" value={dialogDate} onChange={(e:any) => setDialogDate(e.target.value)} />
+                    </div>
+                    <div>
+                      <Label>Time</Label>
+                      <Input type="time" value={dialogTime} onChange={(e:any) => setDialogTime(e.target.value)} />
+                    </div>
+                  </div>
 
-              {joinLink && (
-                <div className="mt-2 p-2 border rounded bg-muted/10">
-                  <div className="text-sm">Meeting link:</div>
-                  <a className="text-primary break-all" href={joinLink} target="_blank" rel="noreferrer">{joinLink}</a>
+                  <div>
+                    <Label>Description</Label>
+                    <div className="p-2 border rounded text-sm text-muted-foreground">{selectedSession.raw?.description || 'Discussion session'}</div>
+                  </div>
+
+                  {joinLink && (
+                    <div className="mt-2 p-2 border rounded bg-muted/10">
+                      <div className="text-sm">Meeting link:</div>
+                      <a className="text-primary break-all" href={joinLink} target="_blank" rel="noreferrer">{joinLink}</a>
+                    </div>
+                  )}
                 </div>
+              ) : (
+                <div className="text-center text-sm text-muted-foreground">No session selected</div>
               )}
             </div>
 

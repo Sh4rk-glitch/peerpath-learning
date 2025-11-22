@@ -48,11 +48,22 @@ const Profile = () => {
       setDisplayName(data.display_name || "");
       setBio(data.bio || "");
     } catch (error: any) {
-      toast({
-        title: "Error loading profile",
-        description: error.message,
-        variant: "destructive",
-      });
+      // If profiles table is missing or access denied, fall back to auth metadata
+      console.error('fetchProfile error', error);
+      // Do not surface a destructive toast when the profiles table is unavailable.
+      // Use console warning and fall back to auth metadata so the page still renders.
+      console.warn('Profiles table unavailable or permission denied; using fallback profile.');
+      const fallback = {
+        id: user?.id,
+        display_name: user?.user_metadata?.full_name ?? user?.email ?? 'Student',
+        created_at: new Date().toISOString(),
+        reputation: 0,
+        avatar_url: user?.user_metadata?.avatar_url ?? null,
+        bio: '',
+      };
+      setProfile(fallback as any);
+      setDisplayName(fallback.display_name || "");
+      setBio(fallback.bio || "");
     }
   };
 
@@ -110,6 +121,11 @@ const Profile = () => {
       <Navigation />
 
       <div className="container py-8">
+        {user && !(user.email_confirmed_at || (user as any).email_confirmed || (user as any).confirmed_at) && (
+          <div className="mb-4 p-3 rounded bg-yellow-50 border border-yellow-200 text-sm">
+            <strong>Email not confirmed:</strong> Please check your email for a confirmation message and follow the link to verify your address.
+          </div>
+        )}
         <div className="grid gap-8 lg:grid-cols-3">
           {/* Profile Card */}
           <Card className="lg:col-span-1">

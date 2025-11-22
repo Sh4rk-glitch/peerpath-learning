@@ -189,6 +189,94 @@ All colors MUST be HSL.
     40% { opacity: 1; transform: scale(1.05); }
     100% { opacity: 0; transform: scale(1.6); }
   }
+
+  /* Top-down theme sweep overlay for smoother theme toggles */
+  .theme-toggle-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+    overflow: hidden;
+  }
+
+  .theme-toggle-sweep {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 100vh;
+    transform: translateY(-100%);
+    will-change: transform, opacity;
+    /* default dark-ish sweep; JS will set data-mode and we override below */
+    background: var(--overlay-tint, rgba(0,0,0,0.88));
+    transition: transform 650ms cubic-bezier(.22,.9,.35,1), opacity 320ms ease;
+    display: block;
+  }
+
+  /* subtle wavy bottom edge using an inline SVG as a decorative stripe */
+  .theme-toggle-sweep::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -2px;
+    height: 140px;
+    background-repeat: no-repeat;
+    background-position: bottom center;
+    background-size: cover;
+    pointer-events: none;
+    opacity: 0.9;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1440 120' preserveAspectRatio='none'><path fill='%23ffffff' d='M0,32 C180,80 360,8 540,32 C720,56 900,8 1080,32 C1260,56 1440,8 1440,8 L1440,120 L0,120 Z'/></svg>");
+  }
+
+  /* Enter: sweep moves down from the top into view, covering the page */
+  .theme-toggle-overlay.enter .theme-toggle-sweep {
+    transform: translateY(0);
+  }
+
+  /* Reveal: after we swap the theme, move the sweep out downward to reveal the new UI */
+  .theme-toggle-overlay.reveal .theme-toggle-sweep {
+    transform: translateY(100%);
+    opacity: 0.95;
+  }
+
+  /* Light vs dark sweep tinting */
+  .theme-toggle-sweep[data-mode="dark"] {
+    background: rgba(6,10,15,0.92);
+  }
+  .theme-toggle-sweep[data-mode="light"] {
+    background: rgba(255,255,255,0.96);
+    filter: drop-shadow(0 -8px 18px rgba(0,0,0,0.05));
+  }
+
+  /* Radial ripple anchored at the top-origin X position for a cooler wave */
+  .theme-toggle-sweep::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 100vh;
+    pointer-events: none;
+    background: radial-gradient(circle at var(--tw-x, 50%) 0px, rgba(255,255,255,0.12), rgba(255,255,255,0.04) 20%, transparent 40%);
+    opacity: 0;
+    transform: scale(0.6);
+    transform-origin: var(--tw-x, 50%) 0%;
+  }
+
+  .theme-toggle-overlay.enter .theme-toggle-sweep::before {
+    animation: ripple-expand 650ms cubic-bezier(.22,.9,.35,1) forwards;
+  }
+
+  .theme-toggle-overlay.reveal .theme-toggle-sweep::before {
+    opacity: 0.6;
+  }
+
+  @keyframes ripple-expand {
+    0% { opacity: 0; transform: scale(0.5); }
+    40% { opacity: 1; transform: scale(1.05); }
+    100% { opacity: 0; transform: scale(1.6); }
+  }
 }
 
 ::view-transition-old(root),

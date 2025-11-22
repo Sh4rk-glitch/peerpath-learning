@@ -5,6 +5,10 @@ import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
 import lessonGen from "@/lib/lessonGenerator";
 import { Microscope, Calculator, BookText, Languages, Palette, Music, Dumbbell, Code, FlaskConical } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import SessionCard from "@/components/SessionCard";
+import { useAuth } from "@/hooks/useAuth";
+import { useToast } from "@/hooks/use-toast";
 
 const Subjects = () => {
   const allSubjects = [
@@ -96,10 +100,30 @@ const Subjects = () => {
 
   const { slug } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const { toast } = useToast();
 
   const selected = slug ? allSubjects.find(s => encodeURIComponent(s.title.replace(/\s+/g, "-").toLowerCase()) === slug) : null;
   const subjectSlug = slug || null;
   const [lessons, setLessons] = useState<Array<{ title: string; content: string }>>([]);
+  const [subjectSessions, setSubjectSessions] = useState<any[]>([]);
+
+  const handleJoin = async (sessionId: string) => {
+    if (!user) { navigate('/auth'); return; }
+    try {
+      const { error } = await supabase.from('session_participants').insert({ session_id: sessionId, user_id: user.id });
+      if (error) throw error;
+      toast({ title: 'Joined', description: 'You joined the session.' });
+      // Re-fetch sessions to update participation status if necessary
+      const subjectId = (selected as any)?.id || (selected ? encodeURIComponent(selected.title.toLowerCase()) : null);
+      if (subjectId) {
+        const { data } = await supabase.from('sessions').select('*').eq('subject_id', subjectId);
+        setSubjectSessions(data || []);
+      }
+    } catch (err: any) {
+      toast({ title: 'Error joining session', description: err?.message || String(err), variant: 'destructive' });
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -107,11 +131,27 @@ const Subjects = () => {
       lessonGen.getCurriculum(subjectSlug).then((c) => { if (mounted) setLessons(c || []); }).catch(() => {
         if (mounted) setLessons([]);
       });
+
+      const fetchSubjectSessions = async () => {
+        try {
+          const subjectId = (selected as any)?.id || (selected ? encodeURIComponent(selected.title.toLowerCase()) : null);
+          if (subjectId) {
+            const { data } = await supabase.from('sessions').select('*').eq('subject_id', subjectId);
+            if (mounted) setSubjectSessions(data || []);
+          }
+        } catch (error) {
+          console.error('Error fetching subject sessions:', error);
+          if (mounted) setSubjectSessions([]);
+        }
+      };
+      fetchSubjectSessions();
+
     } else {
       setLessons([]);
+      setSubjectSessions([]);
     }
     return () => { mounted = false; };
-  }, [subjectSlug]);
+  }, [subjectSlug, selected]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -120,9 +160,9 @@ const Subjects = () => {
       <div className="container py-8">
         <div className="mb-8 flex items-center justify-between">
           <div>
-            <h1 className="mb-2">All Subjects</h1>
+            <h1 className="mb-2">{selected ? selected.title : 'All Subjects'}</h1>
             <p className="text-xl text-muted-foreground">
-              Explore subjects and start building your skill tree
+              {selected ? `Explore learning resources and sessions for ${selected.title}` : 'Explore subjects and start building your skill tree'}
             </p>
           </div>
           {selected && (
@@ -132,15 +172,28 @@ const Subjects = () => {
           )}
         </div>
 
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {allSubjects.map((subject) => (
-            <SubjectCard key={subject.title} {...subject} />
-          ))}
-        </div>
+        {!selected && (
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {allSubjects.map((subject) => (
+              <SubjectCard key={subject.title} {...subject} />
+            ))}
+          </div>
+        )}
 
         {selected && (
           <section className="mt-12">
-            <h2 className="mb-4">{selected.title}</h2>
+            <h2 className="mb-4">Live Sessions for {selected.title}</h2>
+            {subjectSessions.length > 0 ? (
+              <div className="grid gap-6 md:grid-cols-2">
+                {subjectSessions.map((session) => (
+                  <SessionCard key={session.id} sessionId={session.id} onJoin={() => handleJoin(session.id)} {...session} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-muted-foreground mb-6">No upcoming sessions for {selected.title}. Be the first to create one!</p>
+            )}
+
+            <h2 className="mb-4 mt-8">Learning Pathway and Resources</h2>
             <p className="text-muted-foreground mb-6">Learning pathway and resources for {selected.title}.</p>
 
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

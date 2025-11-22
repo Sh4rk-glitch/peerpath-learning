@@ -9,24 +9,7 @@ import ProgressCard from "@/components/ProgressCard";
 import { Flame, Target, Award, Calendar, TrendingUp, Clock } from "lucide-react";
 
 const Dashboard = () => {
-  const { user } = useAuth();
-  const [displayName, setDisplayName] = useState<string | null>(null);
-  const [loadingProfile, setLoadingProfile] = useState(true);
-
-  useEffect(() => {
-    const fetchProfile = async () => {
-      if (!user) { setLoadingProfile(false); return; }
-      try {
-        const { data, error } = await supabase.from("profiles").select("display_name").eq("id", user.id).single();
-        if (!error && data) setDisplayName(data.display_name);
-      } catch (e) {
-        // ignore
-      }
-      setLoadingProfile(false);
-    };
-
-    fetchProfile();
-  }, [user]);
+  const { user, displayName, profileLoading } = useAuth();
   const progressData = [
     {
       subject: "AP Biology",
@@ -73,7 +56,7 @@ const Dashboard = () => {
         {/* Header */}
         <div className="mb-8">
           <h1 className="mb-2">{
-            loadingProfile ? 'Welcome back' : `Welcome back, ${displayName ?? user?.user_metadata?.full_name ?? user?.email?.split('@')[0] ?? 'Student'}!`
+            profileLoading ? 'Welcome back' : `Welcome back, ${displayName ?? user?.user_metadata?.full_name ?? user?.email?.split('@')[0] ?? 'Student'}!`
           }</h1>
           <p className="text-xl text-muted-foreground">
             Track your progress and continue learning
@@ -159,9 +142,9 @@ const Dashboard = () => {
                     </div>
                     
                     <div className="text-right">
-                      {"score" in activity && (
-                        <Badge variant={activity.score >= 80 ? "default" : "secondary"}>
-                          {activity.score}%
+                      {"score" in activity && typeof (activity as any).score === 'number' && (
+                        <Badge variant={(activity as any).score >= 80 ? "default" : "secondary"}>
+                          {(activity as any).score}%
                         </Badge>
                       )}
                       {"duration" in activity && (

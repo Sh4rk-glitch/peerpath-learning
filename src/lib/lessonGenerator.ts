@@ -85,11 +85,30 @@ function buildExpandedContent(title: string, short: string) {
 async function generateWithLLM(subjectSlug: string, base: Array<{ title: string; content: string }>) {
   try {
     // Call a local server-side proxy to avoid exposing API keys in the browser.
-    const resp = await fetch('/api/generate-lessons', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ subject: subjectSlug, base }),
-    });
+    // Prefer calling Supabase Edge Function if available
+    const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
+    const key = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY || '';
+    const fnUrl = supabaseUrl ? `${supabaseUrl.replace(/\/$/, '')}/functions/v1/generate_lessons` : null;
+    let resp: Response | null = null;
+    if (fnUrl) {
+      try {
+        resp = await fetch(fnUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'apikey': key, 'Authorization': `Bearer ${key}` },
+          body: JSON.stringify({ subject: subjectSlug, base }),
+        });
+      } catch (e) {
+        resp = null;
+      }
+    }
+    if (!resp) {
+      // fallback to old path if function missing
+      resp = await fetch('/api/generate-lessons', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject: subjectSlug, base }),
+      });
+    }
     if (!resp.ok) return null;
     const out = await resp.json();
     if (out && out.lessons && Array.isArray(out.lessons)) return out.lessons;
@@ -99,29 +118,70 @@ async function generateWithLLM(subjectSlug: string, base: Array<{ title: string;
   }
 }
 
+// New helper: request quiz generation from Supabase Edge Function (OpenAI)
+export async function generateQuizWithLLM(lesson: { title: string; content: string }, count = 5) {
+  try {
+    const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
+    const key = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY || '';
+    if (!supabaseUrl || !key) return null;
+    const fnUrl = `${supabaseUrl.replace(/\/$/, '')}/functions/v1/generate_quiz`;
+    const res = await fetch(fnUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': key, 'Authorization': `Bearer ${key}` },
+      body: JSON.stringify({ lesson, count }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data && Array.isArray(data.questions)) return data.questions;
+    return null;
+  } catch (e) {
+    console.warn('generateQuizWithLLM error', e);
+    return null;
+  }
+}
+
 export async function getCurriculum(subjectSlug: string) {
   // try exact match
   const slug = subjectSlug.toLowerCase();
   const simple = slug.replace(/^ap-/, "");
-
   let base = builtInCurricula[slug] || builtInCurricula[simple];
+
+  // If we have a small built-in base, augment or synthesize it so every subject returns a
+  // comprehensive set of lessons (targetCount). We prefer built-in lessons but expand
+  // each item into a multi-paragraph lesson using buildExpandedContent.
+  const targetCount = 8;
   if (!base) {
     // default: synthesize several lessons with expanded content
-    base = Array.from({ length: 6 }).map((_, i) => ({
+    base = Array.from({ length: targetCount }).map((_, i) => ({
       title: `${simple.replace(/-/g, ' ')} — Topic ${i + 1}`,
       content: `This lesson covers key concepts of ${simple.replace(/-/g, ' ')}. It introduces important ideas and practice exercises.`,
     }));
+  } else if (Array.isArray(base) && base.length < targetCount) {
+    // augment the base with generated variations so we reach the target count
+    const extra: Array<{ title: string; content: string }> = [];
+    for (let i = base.length; i < targetCount; i++) {
+      const seed = base[i % base.length];
+      extra.push({
+        title: `${seed.title} — Advanced Topic ${i + 1}`,
+        content: `${seed.content} Deeper exploration and applied examples for advanced learners.`,
+      });
+    }
+    base = base.concat(extra);
   }
 
   // Try enriching lessons with an LLM if configured — otherwise fall back to local expansion
   const llm = await generateWithLLM(slug, base);
   if (llm && Array.isArray(llm) && llm.length > 0) {
-    // Ensure each item has title/content
-    return llm.map((it: any) => ({ title: it.title || 'Lesson', content: it.content || buildExpandedContent(it.title || 'Lesson', it.short || '') }));
+    // Ensure each item has title/content; also limit/normalize to targetCount
+    const normalized = llm.slice(0, targetCount).map((it: any, idx: number) => ({
+      title: it.title || base[idx]?.title || 'Lesson',
+      content: it.content || buildExpandedContent(it.title || base[idx]?.title || 'Lesson', it.short || base[idx]?.content || ''),
+    }));
+    return normalized;
   }
 
   // Expand each lesson's content significantly for the lesson page (local fallback)
-  const expanded = base.map((l) => ({
+  const expanded = base.slice(0, targetCount).map((l) => ({
     title: l.title,
     content: buildExpandedContent(l.title, l.content),
   }));
@@ -134,78 +194,121 @@ export function getLesson(subjectSlug: string, index: number) {
 }
 
 // Very simple quiz generator: pick 3 short questions by cloze removal of keywords
-export function generateQuizFromLesson(lesson: { title: string; content: string }) {
+export function generateQuizFromLesson(lesson: { title: string; content: string }, desiredCount?: number) {
   const content = lesson.content || '';
+  // Remove structural headings like 'Overview:', 'Key Concepts:', etc. to avoid picking them as answers
+  const cleaned = content.split('\n').filter(line => !/^(Overview|Key Concepts|Detailed Explanation|Summary|Applications)\s*:/i.test(line)).join(' ');
+
   // split into sentences
-  const sentences = content.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
-  // extract candidate keywords (simple heuristic)
-  const words = content.split(/\s+/).map(w => w.replace(/[^a-zA-Z]/g, '')).filter(Boolean);
-  const stop = new Set(["which","where","when","what","that","this","these","those","with","about","have","has","are","the","and","for","from","into","its","it's","use","used","using"]);
-  const candidates = Array.from(new Set(words.filter(w => w.length > 4 && !stop.has(w.toLowerCase())).map(w => w))).slice(0, 40);
+  const sentences = cleaned.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean).filter(s => s.length > 20);
 
-  const approxLength = content.length;
-  const qCount = Math.min(10, Math.max(5, Math.floor(approxLength / 400)));
-  const questions: Array<{ question: string; choices: string[]; answerIndex: number; type?: string }> = [];
+  // build candidate terms: pick nouns/keywords heuristically
+  const rawWords = cleaned.split(/\s+/).map(w => w.replace(/[^a-zA-Z\-]/g, '')).filter(Boolean);
+  const stop = new Set(["which","where","when","what","that","this","these","those","with","about","have","has","are","the","and","for","from","into","its","it's","use","used","using","include","includes","overview","detailed","summary","examples","example","section","related","key","concepts","concept"]);
+  const freq: Record<string, number> = {};
+  rawWords.forEach(w => {
+    const lw = w.toLowerCase();
+    if (lw.length < 4) return;
+    if (stop.has(lw)) return;
+    freq[lw] = (freq[lw] || 0) + 1;
+  });
+  // prefer longer or capitalized words (likely terms)
+  const candidates = Object.keys(freq).sort((a, b) => (freq[b] - freq[a]) || (b.length - a.length)).slice(0, 60);
 
-  // helper: pick distractors
+  const approxLength = cleaned.length;
+  const defaultCount = Math.min(10, Math.max(3, Math.floor(approxLength / 600)));
+  const qCount = typeof desiredCount === 'number' && desiredCount > 0 ? Math.max(1, Math.min(20, desiredCount)) : defaultCount;
+  const questions: Array<{ question: string; choices: string[]; answerIndex: number; type?: string; explanation?: string; sourceSentence?: string }> = [];
+
   const pickDistractors = (correct: string, n = 3) => {
     const pool = candidates.filter(c => c.toLowerCase() !== correct.toLowerCase());
     const out: string[] = [];
-    while (out.length < n && pool.length > 0) {
-      const idx = Math.floor(Math.random() * pool.length);
-      out.push(pool.splice(idx, 1)[0]);
+    // prefer words of similar length
+    pool.sort((a, b) => Math.abs(a.length - correct.length) - Math.abs(b.length - correct.length));
+    let i = 0;
+    while (out.length < n && i < pool.length) {
+      const c = pool[i++];
+      if (!out.includes(c)) out.push(c);
     }
-    while (out.length < n) out.push('example');
-    return out;
+    // fallback synthetic distractors
+    while (out.length < n) out.push(correct + 'y');
+    return out.map(s => s.charAt(0).toUpperCase() + s.slice(1));
   };
 
-  for (let i = 0; i < qCount; i++) {
-    const sentence = sentences[i % sentences.length] || sentences[Math.floor(Math.random() * sentences.length)] || content.slice(0, 120);
-    // choose a keyword from the sentence if possible
-    const sentenceWords = sentence.split(/\s+/).map(w => w.replace(/[^a-zA-Z]/g, '')).filter(Boolean);
-    let keyword = sentenceWords.find(w => candidates.includes(w)) || candidates[i % candidates.length] || sentenceWords.find(w => w.length > 4) || 'concept';
+  // helper: pick a sentence that contains a candidate term
+  const sentenceForTerm = (term: string) => {
+    const re = new RegExp('\\b' + term + '\\b', 'i');
+    const found = sentences.find(s => re.test(s));
+    return found || sentences[Math.floor(Math.random() * sentences.length)] || '';
+  };
 
-    keyword = keyword || 'concept';
+  // First: templated factual questions for common concepts (improves quality for taught topics)
+  const usedTerms = new Set<string>();
+  const knowledgeTemplates: Record<string, { question: string; answer: string; distractors: string[] }> = {
+    nucleus: { question: 'Which organelle contains the cell\'s genetic material (DNA)?', answer: 'Nucleus', distractors: ['Mitochondria', 'Ribosome', 'Chloroplast'] },
+    mitochondria: { question: 'Which organelle is the primary site of ATP production?', answer: 'Mitochondria', distractors: ['Nucleus', 'Chloroplast', 'Golgi apparatus'] },
+    chloroplasts: { question: 'Which organelle is responsible for photosynthesis in plant cells?', answer: 'Chloroplasts', distractors: ['Mitochondria', 'Ribosome', 'Lysosome'] },
+    diffusion: { question: 'Which process moves molecules from an area of higher concentration to lower concentration without requiring energy?', answer: 'Diffusion', distractors: ['Active transport', 'Endocytosis', 'Osmosis'] },
+    osmosis: { question: 'Which process specifically refers to the movement of water across a semipermeable membrane?', answer: 'Osmosis', distractors: ['Diffusion', 'Active transport', 'Facilitated diffusion'] },
+    'active transport': { question: 'Which transport mechanism requires cellular energy (ATP) to move substances against their concentration gradient?', answer: 'Active transport', distractors: ['Diffusion', 'Osmosis', 'Facilitated diffusion'] },
+    cytoskeleton: { question: 'Which cellular structure provides internal support and helps enable movement within the cell?', answer: 'Cytoskeleton', distractors: ['Cell membrane', 'Nucleus', 'Ribosome'] },
+    cells: { question: 'What is the basic unit of life?', answer: 'Cells', distractors: ['Organelles', 'Tissues', 'Molecules'] },
+  };
 
-    // Alternate question types for variety
-    const typeRoll = i % 3; // 0: cloze MC, 1: true/false, 2: definition-style MC
-
-    if (typeRoll === 0) {
-      // Cloze multiple-choice
-      const questionText = sentence.replace(new RegExp(keyword, 'ig'), '_____');
-      const correct = keyword;
-      const distractors = pickDistractors(correct, 3);
-      const choices = [correct, ...distractors];
+  for (const k of Object.keys(knowledgeTemplates)) {
+    if (questions.length >= qCount) break;
+    const re = new RegExp('\\b' + k.replace(/\s+/g, '\\s+') + '\\b', 'i');
+    if (re.test(cleaned)) {
+      const tpl = knowledgeTemplates[k];
+      const choices = [tpl.answer, ...tpl.distractors].slice(0, 4);
       // shuffle
       for (let j = choices.length - 1; j > 0; j--) {
-        const k = Math.floor(Math.random() * (j + 1));
-        [choices[j], choices[k]] = [choices[k], choices[j]];
+        const t = Math.floor(Math.random() * (j + 1));
+        [choices[j], choices[t]] = [choices[t], choices[j]];
       }
-      const answerIndex = choices.findIndex(c => c === correct);
-      questions.push({ question: `Fill in the blank: ${questionText}`, choices, answerIndex, type: 'cloze' });
-    } else if (typeRoll === 1) {
-      // True/False by slightly mutating the sentence
-      const distractor = pickDistractors(keyword, 1)[0] || 'something';
-      const makeFalse = Math.random() < 0.5;
-      const statement = makeFalse ? sentence.replace(new RegExp(keyword, 'ig'), distractor) : sentence;
-      const choices = ['True', 'False'];
-      const answerIndex = makeFalse ? 1 : 0; // if we changed it, correct answer is False
-      questions.push({ question: `Is the following statement true? ${statement}`, choices, answerIndex, type: 'truefalse' });
-    } else {
-      // Definition / concept multiple-choice: ask "Which best describes <keyword>?"
-      const correct = keyword;
-      const distractors = pickDistractors(correct, 3);
+      const answerIndex = choices.findIndex(c => c.toLowerCase() === tpl.answer.toLowerCase());
+      questions.push({ question: tpl.question, choices, answerIndex, type: 'fact', explanation: `Correct: ${tpl.answer}` });
+      usedTerms.add(k);
+    }
+  }
+
+  // Fill remaining slots with heuristic-generated questions, avoiding already-used terms
+  for (let i = 0, idx = 0; questions.length < qCount; idx++) {
+    const term = candidates[idx % candidates.length] || (rawWords.find(w => w.length > 6) || '').toLowerCase();
+    if (!term) break;
+    if (usedTerms.has(term)) continue;
+    usedTerms.add(term);
+    const sentence = sentenceForTerm(term);
+    const correct = term.charAt(0).toUpperCase() + term.slice(1);
+
+    if (sentence && new RegExp('\b' + term + '\b', 'i').test(sentence)) {
+      const questionText = sentence.replace(new RegExp('\b' + term + '\b', 'ig'), '_____');
+      const distractors = pickDistractors(term, 3);
       const choices = [correct, ...distractors];
       for (let j = choices.length - 1; j > 0; j--) {
         const k = Math.floor(Math.random() * (j + 1));
         [choices[j], choices[k]] = [choices[k], choices[j]];
       }
-      const answerIndex = choices.findIndex(c => c === correct);
-      questions.push({ question: `Which term best fits this concept: "${sentence.slice(0, 120).replace(/\s+/g, ' ')}..."`, choices, answerIndex, type: 'concept' });
+      const answerIndex = choices.findIndex(c => c.toLowerCase() === correct.toLowerCase());
+      const explanation = `The correct answer is "${correct}". Context: ${sentence}`;
+      questions.push({ question: `Fill in the blank: ${questionText}`, choices, answerIndex, type: 'cloze', explanation, sourceSentence: sentence });
+      continue;
     }
+
+    const snippet = (sentence || '').slice(0, 140).replace(/\s+/g, ' ');
+    const distractors = pickDistractors(term, 3);
+    const choices = [correct, ...distractors];
+    for (let j = choices.length - 1; j > 0; j--) {
+      const k = Math.floor(Math.random() * (j + 1));
+      [choices[j], choices[k]] = [choices[k], choices[j]];
+    }
+    const answerIndex = choices.findIndex(c => c.toLowerCase() === correct.toLowerCase());
+    const explanation = `"${correct}" is the best answer. Context: ${snippet}`;
+    questions.push({ question: `Which term best matches this concept: "${snippet}..."`, choices, answerIndex, type: 'concept', explanation, sourceSentence: sentence });
+    i++;
   }
 
   return questions;
 }
 
-export default { getCurriculum, getLesson, generateQuizFromLesson };
+export default { getCurriculum, getLesson, generateQuizFromLesson, generateQuizWithLLM };

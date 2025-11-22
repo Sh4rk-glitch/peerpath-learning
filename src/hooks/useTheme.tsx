@@ -15,7 +15,9 @@ export function useTheme() {
 
     // default to system preference
     if (typeof window !== "undefined" && window.matchMedia) {
-      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      return window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
     }
 
     return "light";
@@ -36,29 +38,18 @@ export function useTheme() {
     }
   }, [theme]);
 
-  const toggle = () => {
-    // briefly disable transitions to avoid flicker
-    try {
-      const root = document.documentElement;
-      root.classList.add("disable-theme-transition");
-      setTimeout(() => root.classList.remove("disable-theme-transition"), 120);
-      // Add a temporary theme-wave animation class for a nicer visual
-      try {
-        // capture click position for nicer wave origin if available
-        const x = (window as any).__lastThemeToggleX || '50%';
-        const y = (window as any).__lastThemeToggleY || '50%';
-        root.style.setProperty('--tw-x', typeof x === 'number' ? `${x}px` : x);
-        root.style.setProperty('--tw-y', typeof y === 'number' ? `${y}px` : y);
-        root.classList.add('theme-wave');
-        setTimeout(() => root.classList.remove('theme-wave'), 800);
-      } catch (e) {
-        // ignore
-      }
-    } catch (e) {
-      // ignore
-    }
+  const toggle = (event?: React.MouseEvent) => {
+    const newTheme = theme === "dark" ? "light" : "dark";
 
-    setTheme((t) => (t === "dark" ? "light" : "dark"));
+    // Immediately apply the theme change for instant response
+    const root = document.documentElement;
+    if (newTheme === "dark") {
+      root.classList.add("dark");
+    } else {
+      root.classList.remove("dark");
+    }
+    
+    setTheme(newTheme);
   };
 
   return { theme, setTheme, toggle } as const;

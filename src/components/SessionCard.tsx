@@ -15,6 +15,9 @@ interface SessionCardProps {
   subject: string;
   sessionId?: string;
   onJoin?: (sessionId: string) => Promise<void> | void;
+  onDetails?: () => void;
+  isHost?: boolean;
+  isJoined?: boolean;
 }
 
 const SessionCard = ({
@@ -26,6 +29,11 @@ const SessionCard = ({
   capacity,
   spotsLeft,
   subject,
+  sessionId,
+  onJoin,
+  onDetails,
+  isHost,
+  isJoined,
 }: SessionCardProps) => {
   const isFilling = spotsLeft <= capacity * 0.3;
 
@@ -65,10 +73,15 @@ const SessionCard = ({
           </div>
 
           <div className="flex gap-2">
-            <Button className="flex-1" onClick={() => sessionId && onJoin && onJoin(sessionId)}>
-              Reserve Spot
-            </Button>
-            <Button variant="outline">Details</Button>
+            {!isHost && (
+              <Button className="flex-1" onClick={() => sessionId && onJoin && onJoin(sessionId)}>
+                {isJoined ? 'Cancel Reservation' : 'Reserve Spot'}
+              </Button>
+            )}
+            {isHost && (
+              <Button className="flex-1" variant="outline">Host Controls</Button>
+            )}
+            <Button variant="outline" onClick={() => onDetails && onDetails()}>Details</Button>
           </div>
         </div>
       </div>

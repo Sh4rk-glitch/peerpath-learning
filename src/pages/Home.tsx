@@ -219,6 +219,7 @@ const Home = () => {
           
           <div className="mt-12 pt-8 border-t text-center text-sm text-muted-foreground">
             <p>© 2025 PeerPath. Built for FBLA Competition.</p>
+            <p className="mt-2">Site built by: Shourya Mishra, Ali Taqir, and Maykel Silalihi</p>
           </div>
         </div>
       </footer>
