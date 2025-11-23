@@ -80,6 +80,16 @@ function buildExpandedContent(title: string, short: string) {
   return paragraphs.join('\n\n');
 }
 
+// Exported sanitizer to clean up quiz text (removes invisible/control chars and collapses whitespace)
+export function sanitizeQuizText(t: string) {
+  if (!t) return '';
+  // remove zero-width / invisible characters and control chars
+  let out = t.replace(/[\u200B-\u200F\uFEFF\u2028\u2029\u0000-\u001F]/g, '');
+  // normalize excessive whitespace and newlines into single spaces
+  out = out.replace(/\s+/g, ' ').trim();
+  return out;
+}
+
 // Attempt to use an LLM (Gemini) to enrich lessons when an API key is supplied.
 async function generateWithLLM(subjectSlug: string, base: Array<{ title: string; content: string }>) {
   try {
@@ -159,26 +169,25 @@ async function generateWithLLM(subjectSlug: string, base: Array<{ title: string;
 }
 
 // New helper: request quiz generation from Supabase Edge Function or direct Gemini API
-export async function generateQuizWithLLM(lesson: { title: string; content: string }, count = 5) {
+export async function generateQuizWithLLM(lesson: { title: string; content: string }, count = 5, style: 'mixed'|'vocab'|'concept'|'application' = 'mixed') {
   try {
-    // First try: Supabase Edge Function
     const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
     const key = (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY || '';
-    
+
+    // First try: Supabase Edge Function if configured
     if (supabaseUrl && key) {
       try {
         const fnUrl = `${supabaseUrl.replace(/\/$/, '')}/functions/v1/generate_quiz`;
         const res = await fetch(fnUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'apikey': key, 'Authorization': `Bearer ${key}` },
-          body: JSON.stringify({ lesson, count }),
+          body: JSON.stringify({ lesson, count, style }),
         });
         if (res.ok) {
           const data = await res.json();
-          if (data && Array.isArray(data.questions)) {
-            console.log('✅ Generated quiz with Supabase Edge Function');
-            return data.questions;
-          }
+          // Edge function may return { questions: [...] } or the array directly
+          if (data && Array.isArray(data.questions)) return data.questions;
+          if (Array.isArray(data)) return data;
         }
       } catch (e) {
         console.warn('Supabase quiz generation failed, trying direct Gemini API', e);
@@ -189,9 +198,10 @@ export async function generateQuizWithLLM(lesson: { title: string; content: stri
     const geminiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
     if (geminiKey) {
       try {
-        const prompt = `You are a helpful assistant that generates multiple-choice quizzes from a lesson text.\n` +
+        const styleNote = style === 'vocab' ? 'Prioritize vocabulary-definition questions (term → concise definition).' : style === 'concept' ? 'Prioritize conceptual understanding questions (explain relationships/roles).' : style === 'application' ? 'Prioritize short application/word-problem questions requiring application of a concept.' : 'Produce a balanced mix of vocabulary, conceptual, and application-style questions.';
+        const prompt = `You are an expert educator. ${styleNote} From the lesson below, generate exactly ${count} multiple-choice questions (4 choices each). Avoid cloze/fill-in-the-blank items. Make distractors plausible and focused on common misconceptions.\n\n` +
           `Respond with valid JSON only: an array of objects. Each object must have: question (string), choices (array of 4 unique strings), answerIndex (0-based integer index into choices), explanation (string briefly explaining correct answer). Do not include additional commentary.\n\n` +
-          `Lesson title: ${lesson.title}\n\nContent:\n${lesson.content}\n\nGenerate ${count} questions. Make distractors plausible and avoid repeating near-duplicates. Return JSON array.`;
+          `Lesson title: ${lesson.title}\n\nContent:\n${lesson.content}\n\nGenerate ${count} questions. Return JSON array.`;
 
         const geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${encodeURIComponent(geminiKey)}`, {
           method: 'POST',
@@ -205,7 +215,7 @@ export async function generateQuizWithLLM(lesson: { title: string; content: stri
         if (geminiResp.ok) {
           const data = await geminiResp.json();
           const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-          
+
           // Extract JSON array from response
           const jstart = text.indexOf('[');
           const jend = text.lastIndexOf(']');
@@ -284,121 +294,215 @@ export function getLesson(subjectSlug: string, index: number) {
 }
 
 // Very simple quiz generator: pick 3 short questions by cloze removal of keywords
-export function generateQuizFromLesson(lesson: { title: string; content: string }, desiredCount?: number) {
+export function generateQuizFromLesson(lesson: { title: string; content: string }, desiredCount?: number, style: 'mixed'|'vocab'|'concept'|'application' = 'mixed') {
   const content = lesson.content || '';
-  // Remove structural headings like 'Overview:', 'Key Concepts:', etc. to avoid picking them as answers
-  const cleaned = content.split('\n').filter(line => !/^(Overview|Key Concepts|Detailed Explanation|Summary|Applications)\s*:/i.test(line)).join(' ');
 
-  // split into sentences
-  const sentences = cleaned.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean).filter(s => s.length > 20);
-
-  // build candidate terms: pick nouns/keywords heuristically
-  const rawWords = cleaned.split(/\s+/).map(w => w.replace(/[^a-zA-Z\-]/g, '')).filter(Boolean);
-  const stop = new Set(["which","where","when","what","that","this","these","those","with","about","have","has","are","the","and","for","from","into","its","it's","use","used","using","include","includes","overview","detailed","summary","examples","example","section","related","key","concepts","concept"]);
-  const freq: Record<string, number> = {};
-  rawWords.forEach(w => {
-    const lw = w.toLowerCase();
-    if (lw.length < 4) return;
-    if (stop.has(lw)) return;
-    freq[lw] = (freq[lw] || 0) + 1;
-  });
-  // prefer longer or capitalized words (likely terms)
-  const candidates = Object.keys(freq).sort((a, b) => (freq[b] - freq[a]) || (b.length - a.length)).slice(0, 60);
-
-  const approxLength = cleaned.length;
-  const defaultCount = Math.min(10, Math.max(3, Math.floor(approxLength / 600)));
-  const qCount = typeof desiredCount === 'number' && desiredCount > 0 ? Math.max(1, Math.min(20, desiredCount)) : defaultCount;
-  const questions: Array<{ question: string; choices: string[]; answerIndex: number; type?: string; explanation?: string; sourceSentence?: string }> = [];
-
-  const pickDistractors = (correct: string, n = 3) => {
-    const pool = candidates.filter(c => c.toLowerCase() !== correct.toLowerCase());
-    const out: string[] = [];
-    // prefer words of similar length
-    pool.sort((a, b) => Math.abs(a.length - correct.length) - Math.abs(b.length - correct.length));
-    let i = 0;
-    while (out.length < n && i < pool.length) {
-      const c = pool[i++];
-      if (!out.includes(c)) out.push(c);
+  const shorten = (s:string, n=140) => (s.length > n ? s.slice(0, n).trim() + '...' : s.trim());
+  const cap = (s:string) => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+  const sanitizeText = (t:string) => {
+    if (!t) return '';
+    // remove zero-width / invisible characters and control chars
+    let out = t.replace(/[\u200B-\u200F\uFEFF\u2028\u2029\u0000-\u001F]/g, '');
+    // normalize excessive whitespace and newlines
+    out = out.replace(/\s+/g, ' ').trim();
+    return out;
+  };
+  const shuffle = (arr:string[]) => {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
     }
-    // fallback synthetic distractors
-    while (out.length < n) out.push(correct + 'y');
-    return out.map(s => s.charAt(0).toUpperCase() + s.slice(1));
+    return arr;
   };
 
-  // helper: pick a sentence that contains a candidate term
-  const sentenceForTerm = (term: string) => {
-    const re = new RegExp('\\b' + term + '\\b', 'i');
-    const found = sentences.find(s => re.test(s));
-    return found || sentences[Math.floor(Math.random() * sentences.length)] || '';
-  };
-
-  // First: templated factual questions for common concepts (improves quality for taught topics)
-  const usedTerms = new Set<string>();
-  const knowledgeTemplates: Record<string, { question: string; answer: string; distractors: string[] }> = {
-    nucleus: { question: 'Which organelle contains the cell\'s genetic material (DNA)?', answer: 'Nucleus', distractors: ['Mitochondria', 'Ribosome', 'Chloroplast'] },
-    mitochondria: { question: 'Which organelle is the primary site of ATP production?', answer: 'Mitochondria', distractors: ['Nucleus', 'Chloroplast', 'Golgi apparatus'] },
-    chloroplasts: { question: 'Which organelle is responsible for photosynthesis in plant cells?', answer: 'Chloroplasts', distractors: ['Mitochondria', 'Ribosome', 'Lysosome'] },
-    diffusion: { question: 'Which process moves molecules from an area of higher concentration to lower concentration without requiring energy?', answer: 'Diffusion', distractors: ['Active transport', 'Endocytosis', 'Osmosis'] },
-    osmosis: { question: 'Which process specifically refers to the movement of water across a semipermeable membrane?', answer: 'Osmosis', distractors: ['Diffusion', 'Active transport', 'Facilitated diffusion'] },
-    'active transport': { question: 'Which transport mechanism requires cellular energy (ATP) to move substances against their concentration gradient?', answer: 'Active transport', distractors: ['Diffusion', 'Osmosis', 'Facilitated diffusion'] },
-    cytoskeleton: { question: 'Which cellular structure provides internal support and helps enable movement within the cell?', answer: 'Cytoskeleton', distractors: ['Cell membrane', 'Nucleus', 'Ribosome'] },
-    cells: { question: 'What is the basic unit of life?', answer: 'Cells', distractors: ['Organelles', 'Tissues', 'Molecules'] },
-  };
-
-  for (const k of Object.keys(knowledgeTemplates)) {
-    if (questions.length >= qCount) break;
-    const re = new RegExp('\\b' + k.replace(/\s+/g, '\\s+') + '\\b', 'i');
-    if (re.test(cleaned)) {
-      const tpl = knowledgeTemplates[k];
-      const choices = [tpl.answer, ...tpl.distractors].slice(0, 4);
-      // shuffle
-      for (let j = choices.length - 1; j > 0; j--) {
-        const t = Math.floor(Math.random() * (j + 1));
-        [choices[j], choices[t]] = [choices[t], choices[j]];
+  // Try to extract a 'Key Concepts' section first for focused, topical questions
+  const keySectionMatch = content.match(/Key Concepts:\s*\n([\s\S]*?)(?:\n\n|$)/i);
+  const keyConcepts: Array<{ term: string; desc: string }> = [];
+  if (keySectionMatch) {
+    const lines = keySectionMatch[1].split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      const cleaned = line.replace(/^[-\d\.\)\s]+/, '');
+      // split by em-dash or hyphen or colon
+      const parts = cleaned.split(/\s+—\s+|\s+-\s+|:\s+/);
+      let term = (parts[0] || cleaned).trim();
+      let desc = (parts[1] || parts.slice(1).join(' ') || '').trim();
+      // sanitize term
+      term = term.replace(/[^a-zA-Z0-9\s\-]/g, '').trim();
+      if (!term && desc) {
+        const words = desc.split(/\s+/).slice(0,3).join(' ');
+        term = words;
       }
-      const answerIndex = choices.findIndex(c => c.toLowerCase() === tpl.answer.toLowerCase());
-      questions.push({ question: tpl.question, choices, answerIndex, type: 'fact', explanation: `Correct: ${tpl.answer}` });
-      usedTerms.add(k);
+      if (term) keyConcepts.push({ term, desc: desc || 'Core concept' });
     }
   }
 
-  // Fill remaining slots with heuristic-generated questions, avoiding already-used terms
-  for (let i = 0, idx = 0; questions.length < qCount; idx++) {
-    const term = candidates[idx % candidates.length] || (rawWords.find(w => w.length > 6) || '').toLowerCase();
-    if (!term) break;
-    if (usedTerms.has(term)) continue;
-    usedTerms.add(term);
-    const sentence = sentenceForTerm(term);
-    const correct = term.charAt(0).toUpperCase() + term.slice(1);
+  const qCount = typeof desiredCount === 'number' && desiredCount > 0 ? Math.max(1, Math.min(20, desiredCount)) : Math.min(8, Math.max(3, Math.floor((content||'').length / 800)));
+  const questions: Array<{ question: string; choices: string[]; answerIndex: number; explanation?: string }> = [];
 
-    if (sentence && new RegExp('\b' + term + '\b', 'i').test(sentence)) {
-      const questionText = sentence.replace(new RegExp('\b' + term + '\b', 'ig'), '_____');
-      const distractors = pickDistractors(term, 3);
-      const choices = [correct, ...distractors];
-      for (let j = choices.length - 1; j > 0; j--) {
-        const k = Math.floor(Math.random() * (j + 1));
-        [choices[j], choices[k]] = [choices[k], choices[j]];
+  // prepare a global pool of lesson titles to use as distractors when needed
+  const pool: string[] = [];
+  for (const sub of Object.keys(builtInCurricula)) {
+    (builtInCurricula[sub] || []).forEach(l => { if (l.title) pool.push(l.title.replace(/\s+&\s+/g, ' and ')); });
+  }
+  const shufflePool = shuffle(pool.slice());
+
+  if (keyConcepts.length >= 2) {
+    // Build definition -> term style questions from key concepts (fast and topical)
+    // Detect placeholder-like descriptions and instead generate title- or sentence-focused questions
+    const placeholderRe = /core idea|core concept|important formulas|practice exercises|key concepts|detailed explanation/i;
+    const hasPlaceholders = keyConcepts.every(kc => placeholderRe.test(kc.desc || '') || placeholderRe.test(kc.term || ''));
+
+    // Use the global `shufflePool` prepared above for plausible distractors
+
+    if (hasPlaceholders) {
+      // If descriptions are placeholders, create vocabulary-style questions from the lesson title
+      for (let i = 0; i < qCount; i++) {
+        const correctTerm = keyConcepts[0].term || keyConcepts[0].desc || '';
+        const correct = cap((correctTerm || '').replace(/\s+&\s+/g, ' and '));
+        const distractors = shufflePool.slice((i * 3) % Math.max(1, shufflePool.length), ((i * 3) % Math.max(1, shufflePool.length)) + 3).filter(d => d.toLowerCase() !== correct.toLowerCase()).slice(0, 3);
+        while (distractors.length < 3) distractors.push('A related concept');
+        const choices = shuffle([correct, ...distractors]);
+        const questionText = sanitizeText(`Which term best matches this description: "${shorten(keyConcepts[0].desc || keyConcepts[0].term || '', 160)}"`);
+        const explanation = sanitizeText(`${correct} — ${shorten(keyConcepts[0].desc || '', 300)}`);
+        questions.push({ question: questionText, choices: choices.map(sanitizeText), answerIndex: choices.findIndex(c => c.toLowerCase() === correct.toLowerCase()), explanation });
       }
-      const answerIndex = choices.findIndex(c => c.toLowerCase() === correct.toLowerCase());
-      const explanation = `The correct answer is "${correct}". Context: ${sentence}`;
-      questions.push({ question: `Fill in the blank: ${questionText}`, choices, answerIndex, type: 'cloze', explanation, sourceSentence: sentence });
+    } else {
+      // Produce vocabulary and conceptual questions from key concepts first
+      for (let i = 0; i < Math.min(qCount, keyConcepts.length); i++) {
+        const correct = keyConcepts[i];
+        const correctTerm = cap(correct.term || correct.desc || 'Concept');
+        // distractors: other key terms or shuffled pool
+        const others = keyConcepts.filter((_, idx) => idx !== i).map(k => cap(k.term));
+        const distractors = shuffle(others).slice(0, 2);
+        // add one extra distractor from global pool
+        const extra = shufflePool.find(p => p.toLowerCase() !== correctTerm.toLowerCase());
+        if (extra) distractors.push(extra);
+        while (distractors.length < 3) distractors.push('None of the above');
+        const vocabChoices = shuffle([correctTerm, ...distractors]);
+        questions.push({
+          question: sanitizeText(`Which term best matches this definition: "${shorten(correct.desc || correct.term || '', 140)}"`),
+          choices: vocabChoices.map(sanitizeText),
+          answerIndex: vocabChoices.findIndex(c => c.toLowerCase() === correctTerm.toLowerCase()),
+          explanation: sanitizeText(`${correctTerm} — ${shorten(correct.desc || '', 300)}`)
+        });
+
+        // If we still need more, add a conceptual/application style question based on this key concept
+        if (questions.length < qCount && style !== 'vocab') {
+          const conceptualChoices = shuffle([`${correctTerm} is the underlying cause`, ...(distractors.slice(0,3))]);
+          questions.push({
+            question: sanitizeText(`Which of the following best explains the role of "${shorten(correct.term || correct.desc || '', 80)}" in this lesson?`),
+            choices: conceptualChoices.map(sanitizeText),
+            answerIndex: 0,
+            explanation: sanitizeText(`Role: ${shorten(correct.desc || '', 200)}`)
+          });
+        }
+      }
+    }
+    // If we still need more questions, we'll fall through to sentence-based generation below to fill the remainder.
+  }
+
+  // Fallback: produce cloze-style and short-concept questions from sentences
+  const cleaned = content.replace(/\n+/g, ' ');
+  const sentences = cleaned.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean).filter(s => s.length > 40);
+  const termsPool: string[] = [];
+  // pick longer words that look like technical terms
+  const rawWords = cleaned.split(/\s+/).map(w => w.replace(/[^a-zA-Z\-]/g, '')).filter(Boolean);
+  rawWords.forEach(w => { if (w.length > 5) termsPool.push(w); });
+  // unique and capitalized
+  const stopWords = new Set(['section','lesson','overview','covers','includes','example','examples','practice','questions','question','study','topic','unit','lesson','summary']);
+  const uniq = Array.from(new Set(termsPool)).map(t => cap(t)).filter(t => !stopWords.has(t.toLowerCase())).slice(0, 60);
+
+  const pickDistractors = (correct:string, n=3) => {
+    const pool = uniq.filter(u => u.toLowerCase() !== correct.toLowerCase());
+    const out = pool.slice(0, n);
+    while (out.length < n) out.push(correct + 'y');
+    return out;
+  };
+
+  // Now attempt to fill remaining slots (or replace duplicates) using sentence-based heuristics.
+  const seen = new Set<string>();
+  const unique: Array<{ question: string; choices: string[]; answerIndex: number; explanation?: string }> = [];
+  const pushIfUnique = (q: { question: string; choices: string[]; answerIndex: number; explanation?: string }) => {
+    const key = (q.question || '').trim().toLowerCase();
+    if (!key) return false;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    unique.push(q);
+    return true;
+  };
+
+  // seed unique with already-created questions in order
+  for (const q of questions) pushIfUnique(q);
+
+  let attempts = 0;
+  const maxAttempts = Math.max(20, qCount * 5);
+  // Randomize sentence order to reduce repeated patterns
+  const sentPool = sentences.length > 0 ? shuffle(sentences.slice()) : [];
+
+  while (unique.length < qCount && attempts < maxAttempts) {
+    attempts++;
+    // Prefer sentence-based cloze if available
+    if (sentPool.length > 0) {
+      const s = sentPool[attempts % sentPool.length];
+      const found = uniq.find(u => new RegExp('\\b' + u + '\\b', 'i').test(s));
+      if (found) {
+        // If the user requested application-style, build an application/concept question from the sentence
+        if (style === 'application') {
+          const snippet = shorten(s, 140);
+          const concept = found;
+          const distractors = pickDistractors(concept, 3).map(sanitizeText);
+          const choices = shuffle([`It would likely lead to ${concept}`, ...distractors]).map(sanitizeText);
+          const qobj = { question: sanitizeText(`Given the scenario: "${snippet}...", which outcome is most likely?`), choices, answerIndex: 0, explanation: sanitizeText(`Based on: ${snippet}`) };
+          pushIfUnique(qobj);
+          continue;
+        }
+
+        // Otherwise build a vocabulary-style question using the sentence as a definition/snippet
+        const defSnippet = s.replace(new RegExp('\b' + found + '\b', 'ig'), found);
+        const correct = found;
+        const distractors = pickDistractors(correct, 3);
+        const choices = shuffle([correct, ...distractors]).map(sanitizeText);
+        const answerIndex = choices.findIndex(c => c.toLowerCase() === correct.toLowerCase());
+        const qobj = { question: sanitizeText(`Which term is best defined by: "${shorten(defSnippet, 160)}"`), choices, answerIndex, explanation: sanitizeText(`Context: ${shorten(s,160)}`) };
+        pushIfUnique(qobj);
+        continue;
+      }
+      // If no clear term, produce a conceptual/application-style question from the sentence
+      const snippet = shorten(s, 140);
+      const concept = (uniq[0] || 'Concept');
+      const distractors = pickDistractors(concept, 3).map(sanitizeText);
+      const choices = shuffle([`It would likely lead to ${concept}`, ...distractors]).map(sanitizeText);
+      const answerIndex = 0;
+      const qobj = { question: sanitizeText(`Given the scenario: "${snippet}...", which outcome is most likely?`), choices, answerIndex, explanation: sanitizeText(`Based on: ${snippet}`) };
+      pushIfUnique(qobj);
       continue;
     }
 
-    const snippet = (sentence || '').slice(0, 140).replace(/\s+/g, ' ');
-    const distractors = pickDistractors(term, 3);
-    const choices = [correct, ...distractors];
-    for (let j = choices.length - 1; j > 0; j--) {
-      const k = Math.floor(Math.random() * (j + 1));
-      [choices[j], choices[k]] = [choices[k], choices[j]];
+    // If no sentences, fall back to title-focused or key-concept variants
+    if (keyConcepts.length > 0) {
+      const kc = keyConcepts[attempts % keyConcepts.length];
+      const correct = cap(kc.term || kc.desc || 'Concept');
+      const distractors = shufflePool.slice((attempts * 3) % Math.max(1, shufflePool.length), ((attempts * 3) % Math.max(1, shufflePool.length)) + 3).filter(d => d.toLowerCase() !== correct.toLowerCase()).slice(0,3);
+      while (distractors.length < 3) distractors.push('A related concept');
+      const choices = shuffle([correct, ...distractors]);
+      const answerIndex = choices.findIndex(c => c.toLowerCase() === correct.toLowerCase());
+      const qobj = { question: `Which term best matches this description: "${shorten(kc.desc || kc.term || '', 160)}"`, choices, answerIndex, explanation: `${correct} — ${shorten(kc.desc || '', 300)}` };
+      pushIfUnique(qobj);
+      continue;
     }
-    const answerIndex = choices.findIndex(c => c.toLowerCase() === correct.toLowerCase());
-    const explanation = `"${correct}" is the best answer. Context: ${snippet}`;
-    questions.push({ question: `Which term best matches this concept: "${snippet}..."`, choices, answerIndex, type: 'concept', explanation, sourceSentence: sentence });
-    i++;
+
+    // As a last resort create a generic question from the lesson title
+    const titleSnippet = shorten(lesson.title || 'Lesson', 80);
+    const fallbackChoices = shufflePool.slice(0,3).filter(d => d.toLowerCase() !== titleSnippet.toLowerCase()).slice(0,3);
+    while (fallbackChoices.length < 3) fallbackChoices.push('Related topic');
+    const choices = shuffle([`Overview of ${titleSnippet}`, ...fallbackChoices]);
+    const answerIndex = choices.findIndex(c => c.toLowerCase().startsWith('overview of'));
+    const qobj = { question: `What is the main focus of the lesson titled "${titleSnippet}"?`, choices, answerIndex: answerIndex >= 0 ? answerIndex : 0, explanation: `Overview: ${shorten(lesson.content || '', 160)}` };
+    pushIfUnique(qobj);
   }
 
-  return questions;
+  // Return up to the requested count
+  return unique.slice(0, qCount);
 }
 
-export default { getCurriculum, getLesson, generateQuizFromLesson, generateQuizWithLLM };
+export default { getCurriculum, getLesson, generateQuizFromLesson, generateQuizWithLLM, sanitizeQuizText };

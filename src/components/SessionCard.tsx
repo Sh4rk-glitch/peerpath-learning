@@ -10,6 +10,7 @@ import {
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
+import { useState, useEffect } from 'react';
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Clock, Users, Star } from "lucide-react";
@@ -31,6 +32,8 @@ interface SessionCardProps {
   onViewAttendees?: (sessionId: string) => Promise<void> | void;
   isHost?: boolean;
   isJoined?: boolean;
+  // when this counter increments, the card should ensure its host dialog is closed
+  closeHostDialogTrigger?: number;
 }
 
 const SessionCard = ({
@@ -46,10 +49,23 @@ const SessionCard = ({
   onJoin,
   onDetails,
   onDelete,
+  onEdit,
+  onViewAttendees,
   isHost,
   isJoined,
+  closeHostDialogTrigger,
 }: SessionCardProps) => {
   const isFilling = spotsLeft <= capacity * 0.3;
+  const [hostDialogOpen, setHostDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // close host dialog when parent signals via trigger
+  useEffect(() => {
+    if (typeof closeHostDialogTrigger !== 'undefined') {
+      setHostDialogOpen(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closeHostDialogTrigger]);
 
   return (
     <Card className="p-6 hover:shadow-md transition-shadow">
@@ -95,7 +111,7 @@ const SessionCard = ({
             {isHost && (
               <div className="flex-1">
                 {/* Host controls dialog */}
-                <Dialog>
+                <Dialog open={hostDialogOpen} onOpenChange={setHostDialogOpen}>
                   <DialogTrigger asChild>
                     <Button variant="outline" className="w-full">Host Controls</Button>
                   </DialogTrigger>
@@ -106,13 +122,32 @@ const SessionCard = ({
                     </DialogHeader>
                     <div className="mt-4 space-y-3">
                       <div className="flex flex-col gap-2">
-                        <Button variant="destructive" onClick={() => { if (sessionId && onDelete) onDelete(sessionId); }}>
-                          Delete Session
+                        <Button variant="destructive" disabled={isDeleting} onClick={async () => {
+                          if (!sessionId || !onDelete) return;
+                          try {
+                            setIsDeleting(true);
+                            await onDelete(sessionId);
+                          } catch (e) {
+                            // swallow — parent shows toast
+                            console.error('onDelete error', e);
+                          } finally {
+                            setIsDeleting(false);
+                            setHostDialogOpen(false);
+                          }
+                        }}>
+                          {isDeleting ? 'Deleting...' : 'Delete Session'}
                         </Button>
-                        <Button variant="outline" onClick={() => { if (sessionId && onEdit) onEdit(sessionId); }}>
+                        <Button variant="outline" disabled={isDeleting} onClick={() => {
+                          // close controls then trigger edit
+                          setHostDialogOpen(false);
+                          if (sessionId && onEdit) onEdit(sessionId);
+                        }}>
                           Edit Session
                         </Button>
-                        <Button variant="ghost" onClick={() => { if (sessionId && onViewAttendees) onViewAttendees(sessionId); }}>
+                        <Button variant="ghost" disabled={isDeleting} onClick={() => {
+                          setHostDialogOpen(false);
+                          if (sessionId && onViewAttendees) onViewAttendees(sessionId);
+                        }}>
                           View Attendees
                         </Button>
                       </div>

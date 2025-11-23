@@ -2,101 +2,21 @@ import Navigation from "@/components/Navigation";
 import SubjectCard from "@/components/SubjectCard";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { useState, useEffect } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import lessonGen from "@/lib/lessonGenerator";
-import { Microscope, Calculator, BookText, Languages, Palette, Music, Dumbbell, Code, FlaskConical } from "lucide-react";
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion';
+import { openQuizReviewInNewTab } from '@/lib/quizReview';
+import ALL_SUBJECTS from '@/lib/subjectData';
 import { supabase } from "@/integrations/supabase/client";
 import SessionCard from "@/components/SessionCard";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 
 const Subjects = () => {
-  const allSubjects = [
-    {
-      title: "AP Biology",
-      category: "science" as const,
-      nextSession: "2:30 PM today",
-      activeUsers: 234,
-      icon: <Microscope className="h-6 w-6" />,
-    },
-    {
-      title: "Chemistry",
-      category: "science" as const,
-      nextSession: "3:45 PM today",
-      activeUsers: 187,
-      icon: <FlaskConical className="h-6 w-6" />,
-    },
-    {
-      title: "Calculus",
-      category: "math" as const,
-      nextSession: "4:00 PM today",
-      activeUsers: 189,
-      icon: <Calculator className="h-6 w-6" />,
-    },
-    {
-      title: "Statistics",
-      category: "math" as const,
-      nextSession: "Tomorrow 2:00 PM",
-      activeUsers: 142,
-      icon: <Calculator className="h-6 w-6" />,
-    },
-    {
-      title: "World History",
-      category: "humanities" as const,
-      nextSession: "Tomorrow 3:00 PM",
-      activeUsers: 156,
-      icon: <BookText className="h-6 w-6" />,
-    },
-    {
-      title: "Literature",
-      category: "humanities" as const,
-      nextSession: "5:30 PM today",
-      activeUsers: 178,
-      icon: <BookText className="h-6 w-6" />,
-    },
-    {
-      title: "Spanish",
-      category: "language" as const,
-      nextSession: "5:15 PM today",
-      activeUsers: 198,
-      icon: <Languages className="h-6 w-6" />,
-    },
-    {
-      title: "French",
-      category: "language" as const,
-      nextSession: "Tomorrow 4:30 PM",
-      activeUsers: 143,
-      icon: <Languages className="h-6 w-6" />,
-    },
-    {
-      title: "Digital Art",
-      category: "arts" as const,
-      nextSession: "Tomorrow 1:00 PM",
-      activeUsers: 124,
-      icon: <Palette className="h-6 w-6" />,
-    },
-    {
-      title: "Music Theory",
-      category: "arts" as const,
-      nextSession: "6:00 PM today",
-      activeUsers: 98,
-      icon: <Music className="h-6 w-6" />,
-    },
-    {
-      title: "Computer Science",
-      category: "tech" as const,
-      nextSession: "Tomorrow 10:00 AM",
-      activeUsers: 267,
-      icon: <Code className="h-6 w-6" />,
-    },
-    {
-      title: "Physical Education",
-      category: "health" as const,
-      nextSession: "Tomorrow 9:00 AM",
-      activeUsers: 156,
-      icon: <Dumbbell className="h-6 w-6" />,
-    },
-  ];
+  const allSubjects = ALL_SUBJECTS;
 
   const { slug } = useParams();
   const navigate = useNavigate();
@@ -109,6 +29,17 @@ const Subjects = () => {
   const selected = slug ? allSubjects.find(s => encodeURIComponent(s.title.replace(/\s+/g, "-").toLowerCase()) === slug) : null;
   const subjectSlug = slug || null;
   const [lessons, setLessons] = useState<Array<{ title: string; content: string }>>([]);
+  const [selectedLesson, setSelectedLesson] = useState<{ title: string; content: string } | null>(null);
+  const [showLessonDialog, setShowLessonDialog] = useState(false);
+  const [quizQuestions, setQuizQuestions] = useState<any[] | null>(null);
+  const [showQuizDialog, setShowQuizDialog] = useState(false);
+  const [enhancedQuizQuestions, setEnhancedQuizQuestions] = useState<any[] | null>(null);
+  const [enhancedReady, setEnhancedReady] = useState(false);
+  const [quizAnswers, setQuizAnswers] = useState<Record<number, number>>({});
+  const [quizLoading, setQuizLoading] = useState(false);
+  const [quizResult, setQuizResult] = useState<{ score: number; total: number } | null>(null);
+  const [quizCount, setQuizCount] = useState<number>(5);
+  const [quizStyle, setQuizStyle] = useState<'mixed'|'vocab'|'concept'|'application'>('mixed');
   const [subjectSessions, setSubjectSessions] = useState<any[]>([]);
 
   const handleJoin = async (sessionId: string) => {
@@ -125,6 +56,68 @@ const Subjects = () => {
       }
     } catch (err: any) {
       toast({ title: 'Error joining session', description: err?.message || String(err), variant: 'destructive' });
+    }
+  };
+
+  const openLesson = (lesson: { title: string; content: string }) => {
+    setSelectedLesson(lesson);
+    setShowLessonDialog(true);
+  };
+
+  const openQuizSetup = (lesson: { title: string; content: string }) => {
+    setSelectedLesson(lesson);
+    setShowQuizDialog(true);
+    setQuizQuestions(null);
+    setQuizAnswers({});
+    setQuizResult(null);
+    setEnhancedQuizQuestions(null);
+    setEnhancedReady(false);
+    setQuizCount(5);
+  };
+
+  const startQuizForLesson = async (lesson: { title: string; content: string }, count = 5) => {
+    setSelectedLesson(lesson);
+    setShowQuizDialog(true); // open dialog immediately
+    setQuizLoading(true);
+    setQuizAnswers({});
+    setQuizResult(null);
+    try {
+      // First, generate a fast local quiz to show immediately
+      const local = lessonGen.generateQuizFromLesson(lesson, count, quizStyle);
+      const sanitizedLocal = (local || []).map((q:any) => ({
+        ...q,
+        question: lessonGen.sanitizeQuizText(String(q.question || '')),
+        choices: (q.choices || []).map((c:any) => lessonGen.sanitizeQuizText(String(c || ''))),
+        explanation: lessonGen.sanitizeQuizText(String(q.explanation || '')),
+      }));
+      setQuizQuestions(sanitizedLocal || []);
+      setQuizLoading(false);
+
+      // Meanwhile, try to generate an enhanced quiz via LLM in the background
+      (async () => {
+        try {
+          const enhanced = await lessonGen.generateQuizWithLLM(lesson, Math.max(count, 6), quizStyle);
+          if (enhanced && Array.isArray(enhanced) && enhanced.length > 0) {
+            const sanitized = enhanced.map((q:any) => ({
+              ...q,
+              question: lessonGen.sanitizeQuizText(String(q.question || '')),
+              choices: (q.choices || []).map((c:any) => lessonGen.sanitizeQuizText(String(c || ''))),
+              explanation: lessonGen.sanitizeQuizText(String(q.explanation || '')),
+            }));
+            setEnhancedQuizQuestions(sanitized);
+            setEnhancedReady(true);
+            // notify user lightly
+            try { toast({ title: 'Enhanced quiz ready', description: 'A richer version of this quiz is available.' }); } catch (e) {}
+          }
+        } catch (e) {
+          // ignore background failure
+          console.warn('Background enhanced quiz generation failed', e);
+        }
+      })();
+    } catch (e) {
+      console.error('startQuizForLesson error', e);
+      toast({ title: 'Quiz error', description: 'Could not generate quiz for this lesson.', variant: 'destructive' });
+      setQuizLoading(false);
     }
   };
 
@@ -213,17 +206,140 @@ const Subjects = () => {
             <p className="text-muted-foreground mb-6">Learning pathway and resources for {selected.title}.</p>
 
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                      {lessons.length > 0 ? (
+                        {lessons.length > 0 ? (
                         lessons.map((lesson, i) => {
-                          const overviewWords = lesson.content.split(/\s+/).slice(0, 8).join(' ');
+                          const overviewWords = lesson.content.split(/\s+/).slice(0, 16).join(' ');
                           return (
-                            <LessonCard key={i} subject={selected} index={i + 1} lesson={{...lesson, overview: overviewWords + (lesson.content.split(/\s+/).length > 8 ? '...' : '')}} subjectSlug={subjectSlug || ''} />
+                            <LessonCard
+                              key={i}
+                              subject={selected}
+                              index={i + 1}
+                              lesson={{...lesson, overview: overviewWords + (lesson.content.split(/\s+/).length > 16 ? '...' : '')}}
+                              subjectSlug={subjectSlug || ''}
+                              onView={() => openLesson(lesson)}
+                              onQuiz={() => openQuizSetup(lesson)}
+                            />
                           );
                         })
                       ) : (
                         <div className="col-span-full text-muted-foreground">No lessons available for this subject.</div>
                       )}
             </div>
+
+            {/* Lesson viewer dialog */}
+            <Dialog open={showLessonDialog} onOpenChange={setShowLessonDialog}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>{selectedLesson?.title || 'Lesson'}</DialogTitle>
+                  <DialogDescription>Expanded lesson content with examples and practice.</DialogDescription>
+                </DialogHeader>
+                <div className="mt-4 prose max-w-none">
+                  {selectedLesson ? selectedLesson.content.split('\n\n').map((p, i) => <p key={i}>{p}</p>) : <p>No lesson selected.</p>}
+                </div>
+                <DialogFooter>
+                    <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setShowLessonDialog(false)}>Close</Button>
+                    <Button onClick={() => { if (selectedLesson) { openQuizSetup(selectedLesson); setShowLessonDialog(false); } }}>Take Quiz</Button>
+                  </div>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* Quiz dialog */}
+            <Dialog open={showQuizDialog} onOpenChange={setShowQuizDialog}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Quiz</DialogTitle>
+                  <DialogDescription>Test your understanding of the lesson.</DialogDescription>
+                </DialogHeader>
+
+                <div className="max-w-6xl w-full mx-auto">
+                  <div className="mt-4 space-y-4">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                      <div className="flex items-center gap-2">
+                        <Label htmlFor="quiz-count">Questions</Label>
+                        <Input id="quiz-count" type="number" value={quizCount} min={3} max={20} onChange={(e:any) => {
+                          const v = parseInt(e.target.value || '0', 10);
+                          setQuizCount(isNaN(v) ? 3 : Math.max(3, Math.min(20, v)));
+                        }} className="w-24" />
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <Label htmlFor="quiz-style">Style</Label>
+                        <select id="quiz-style" value={quizStyle} onChange={(e:any) => setQuizStyle(e.target.value)} className="form-select rounded border px-2 py-1 bg-white text-black">
+                          <option value="mixed">Mixed</option>
+                          <option value="vocab">Vocab</option>
+                          <option value="concept">Concept</option>
+                          <option value="application">Application</option>
+                        </select>
+                      </div>
+
+                      <Button onClick={() => {
+                        if (!selectedLesson) return;
+                        try {
+                          const url = `/quiz?subject=${encodeURIComponent((selected as any)?.title?.toLowerCase() || '')}&index=${encodeURIComponent(String(lessons.findIndex(l=>l===selectedLesson)+1 || 1))}&count=${encodeURIComponent(String(quizCount))}&style=${encodeURIComponent(String(quizStyle))}&newtab=1`;
+                          window.open(url, '_blank');
+                        } catch (e) {
+                          console.error('Could not open quiz in new tab', e);
+                        }
+                        setShowQuizDialog(false);
+                      }} disabled={!selectedLesson || quizLoading}>Generate</Button>
+                    </div>
+
+                    {quizLoading && <div className="text-sm text-muted-foreground">Generating quiz...</div>}
+
+                    {!quizLoading && quizQuestions && quizQuestions.length > 0 && (
+                      <div className="max-h-[60vh] overflow-auto">
+                        <div className="md:flex md:items-start md:gap-6">
+                          <div className="md:flex-1 space-y-4">
+                            {quizQuestions.map((q, idx) => (
+                              <div key={idx} className="p-3 border rounded min-w-0">
+                                <div className="font-medium break-words">{idx + 1}. {q.question}</div>
+                                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  {q.choices.map((c:string, ci:number) => (
+                                    <Button key={ci} className={`w-full text-left whitespace-normal break-words ${quizAnswers[idx] === ci ? 'bg-secondary text-white' : ''}`} variant={quizAnswers[idx] === ci ? 'secondary' : 'outline'} onClick={() => setQuizAnswers(a => ({ ...a, [idx]: ci }))}><span>{c}</span></Button>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Right-hand review panel removed from dialog until user submits; review opens in new tab after submit */}
+                        </div>
+                      </div>
+                    )}
+
+                    {!quizLoading && (!quizQuestions || quizQuestions.length === 0) && (
+                      <div className="text-sm text-muted-foreground">No quiz available for this lesson.</div>
+                    )}
+                  </div>
+
+                  <DialogFooter>
+                    <div className="flex gap-2">
+                      <Button variant="outline" onClick={() => { setShowQuizDialog(false); setQuizQuestions(null); setQuizAnswers({}); setQuizResult(null); setEnhancedQuizQuestions(null); setEnhancedReady(false); }}>Close</Button>
+                      {enhancedReady && (
+                        <Button variant="secondary" onClick={() => {
+                          if (enhancedQuizQuestions && enhancedQuizQuestions.length > 0) {
+                            setQuizQuestions(enhancedQuizQuestions);
+                            setEnhancedReady(false);
+                            setEnhancedQuizQuestions(null);
+                            setQuizAnswers({});
+                            setQuizResult(null);
+                          }
+                        }}>Use Enhanced Quiz</Button>
+                      )}
+                    </div>
+                  </DialogFooter>
+
+                  {quizResult && (
+                    <div className="p-4 border-t mt-2 max-h-[40vh] overflow-auto">
+                      <div className="font-semibold">Results: {quizResult.score} / {quizResult.total}</div>
+                      <div className="text-sm text-muted-foreground mt-2">Per-question results are shown beside each question for easier review.</div>
+                    </div>
+                  )}
+                </div>
+              </DialogContent>
+            </Dialog>
           </section>
         )}
       </div>
@@ -231,16 +347,28 @@ const Subjects = () => {
   );
 };
 
-const LessonCard = ({ subject, index, lesson, subjectSlug }: { subject: any; index: number; lesson: { title: string; content: string; overview?: string }; subjectSlug: string }) => {
+const LessonCard = ({ subject, index, lesson, subjectSlug, onView, onQuiz }: { subject: any; index: number; lesson: { title: string; content: string; overview?: string }; subjectSlug: string; onView?: () => void; onQuiz?: () => void }) => {
   const navigate = useNavigate();
 
   return (
-    <div className="p-4 border rounded-lg">
-      <h4 className="font-semibold">{lesson.title}</h4>
-      <p className="text-sm text-muted-foreground">{lesson.overview || lesson.content.split(/\s+/).slice(0,8).join(' ') + '...'}</p>
-      <div className="mt-3 flex items-center gap-2">
-        <Button size="sm" variant="outline" onClick={() => navigate(`/lesson?subject=${encodeURIComponent(subjectSlug)}&index=${index}`)}>Open Lesson</Button>
-        <Button size="sm" onClick={() => navigate(`/schedule?subject=${encodeURIComponent(subjectSlug)}&openSession=1`)}>Join Live Session</Button>
+    <div className="p-4 border rounded-lg min-h-[140px] flex flex-col justify-between">
+      <div>
+        <h4 className="font-semibold">{lesson.title}</h4>
+        <p className="text-sm text-muted-foreground mt-2">{lesson.overview || lesson.content.split(/\s+/).slice(0,16).join(' ') + '...'}</p>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="outline" onClick={() => onView ? onView() : navigate(`/lesson?subject=${encodeURIComponent(subjectSlug)}&index=${index}`)}>View Lesson</Button>
+        <Button size="sm" onClick={() => {
+          if (onQuiz) return onQuiz();
+          // open quiz directly in a new tab with sensible defaults
+          try {
+            const url = `/quiz?subject=${encodeURIComponent(subjectSlug)}&index=${index}&count=5&style=mixed&newtab=1`;
+            window.open(url, '_blank');
+          } catch (e) {
+            navigate(`/lesson?subject=${encodeURIComponent(subjectSlug)}&index=${index}`);
+          }
+        }}>Take Quiz</Button>
+        <Button size="sm" onClick={() => navigate(`/schedule?subject=${encodeURIComponent(subjectSlug)}&openSession=1`)}>Join Live</Button>
         <Button size="sm" variant="ghost" onClick={() => navigate(`/schedule?subject=${encodeURIComponent(subjectSlug)}&openCreate=1`)}>Create Session</Button>
       </div>
     </div>

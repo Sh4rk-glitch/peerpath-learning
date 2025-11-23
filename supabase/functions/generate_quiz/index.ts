@@ -7,12 +7,15 @@ export default async (req: Request) => {
     const body = await req.json().catch(() => ({}));
     const lesson = body.lesson || {};
     const count = Number(body.count) || 5;
+      const style = body.style || 'mixed';
 
     const GEMINI = Deno.env.get('GEMINI_API_KEY');
     const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') || 'gemini-pro';
     if (!GEMINI) return new Response(JSON.stringify({ error: 'Missing GEMINI_API_KEY' }), { status: 500 });
 
-    const prompt = `You are a helpful assistant that generates multiple-choice quizzes from a lesson text.\n` +
+    const styleNote = style === 'vocab' ? 'Prioritize vocabulary-definition questions (term → concise definition).' : style === 'concept' ? 'Prioritize conceptual understanding questions (explain relationships/roles).' : style === 'application' ? 'Prioritize short application/word-problem questions requiring application of a concept.' : 'Produce a balanced mix of vocabulary, conceptual, and application-style questions.';
+
+    const prompt = `You are a helpful assistant that generates multiple-choice quizzes from a lesson text. ${styleNote}\n` +
       `Respond with valid JSON only: an array of objects. Each object must have: question (string), choices (array of 4 unique strings), answerIndex (0-based integer index into choices), explanation (string briefly explaining correct answer). Do not include additional commentary.\n\n` +
       `Lesson title: ${lesson?.title || ''}\n\nContent:\n${lesson?.content || ''}\n\nGenerate ${count} questions. Make distractors plausible and avoid repeating near-duplicates. Return JSON array.`;
 

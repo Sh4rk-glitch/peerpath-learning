@@ -138,7 +138,10 @@ const Lesson = () => {
 
           <div className="flex gap-2 justify-end">
             <Button variant="ghost" onClick={() => navigate(-1)}>Back to Subject</Button>
-            <Button onClick={() => navigate(`/quiz?subject=${encodeURIComponent(subject)}&index=${index}`)}>Next: Quiz</Button>
+            <Button onClick={() => {
+              const url = `/quiz?subject=${encodeURIComponent(subject)}&index=${index}&count=5&style=mixed&newtab=1`;
+              window.open(url, '_blank');
+            }}>Next: Quiz</Button>
           </div>
         </Card>
       </div>

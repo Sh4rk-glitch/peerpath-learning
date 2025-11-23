@@ -19,6 +19,7 @@ const Profile = () => {
   const { toast } = useToast();
   const [profile, setProfile] = useState<any>(null);
   const [displayName, setDisplayName] = useState("");
+  const [username, setUsername] = useState("");
   const [bio, setBio] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
@@ -46,6 +47,8 @@ const Profile = () => {
 
       setProfile(data);
       setDisplayName(data.display_name || "");
+      // prefer explicit username stored in profiles or in auth metadata
+      setUsername(data.username ?? user?.user_metadata?.username ?? "");
       setBio(data.bio || "");
     } catch (error: any) {
       // If profiles table is missing or access denied, fall back to auth metadata
@@ -56,6 +59,7 @@ const Profile = () => {
       const fallback = {
         id: user?.id,
         display_name: user?.user_metadata?.full_name ?? user?.email ?? 'Student',
+        username: user?.user_metadata?.username ?? (user?.email?.split('@')[0] ?? ''),
         created_at: new Date().toISOString(),
         reputation: 0,
         avatar_url: user?.user_metadata?.avatar_url ?? null,
@@ -63,6 +67,7 @@ const Profile = () => {
       };
       setProfile(fallback as any);
       setDisplayName(fallback.display_name || "");
+      setUsername((fallback as any).username || "");
       setBio(fallback.bio || "");
     }
   };
@@ -70,15 +75,36 @@ const Profile = () => {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { error } = await supabase
-        .from("profiles")
-        .update({
-          display_name: displayName,
-          bio: bio,
-        })
-        .eq("id", user!.id);
+      const payload: any = { display_name: displayName, bio };
+      if (username) payload.username = username;
 
-      if (error) throw error;
+      let { error } = await supabase.from("profiles").update(payload).eq("id", user!.id);
+
+      // If the profiles table doesn't have a `username` column, retry without it and notify the developer
+      if (error) {
+        const msg = String(error.message || error.details || '');
+        if (msg.toLowerCase().includes('column "username"') || msg.toLowerCase().includes('column username')) {
+          const { error: err2 } = await supabase.from("profiles").update({ display_name: displayName, bio }).eq("id", user!.id);
+          if (err2) throw err2;
+          toast({ title: 'Profile updated', description: 'Username not persisted: database schema missing `username` column. See migration below to add it.',
+            // keep it informational
+          });
+          // still attempt to update auth metadata below
+        } else {
+          throw error;
+        }
+      }
+
+      // Also update auth user metadata so UI that reads `user.user_metadata.username` reflects changes
+      try {
+        // Supabase auth.updateUser accepts `data` which merges into user_metadata
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        const { data: authData, error: authErr } = await supabase.auth.updateUser({ data: { username: username || null } });
+        if (authErr) console.warn('auth updateUser error', authErr);
+      } catch (e) {
+        console.warn('auth.updateUser exception', e);
+      }
 
       toast({
         title: "Success",
@@ -204,6 +230,17 @@ const Profile = () => {
                     <CardTitle>Edit Profile</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="username">Username</Label>
+                      <Input
+                        id="username"
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        placeholder="username"
+                      />
+                      <p className="text-xs text-muted-foreground">Your unique username shown across the app.</p>
+                    </div>
+
                     <div className="space-y-2">
                       <Label htmlFor="display-name">Display Name</Label>
                       <Input

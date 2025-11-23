@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import Navigation from "@/components/Navigation";
 import SessionCard from "@/components/SessionCard";
@@ -16,13 +16,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-const allSubjects = [
-  { id: 'ap-biology', title: 'AP Biology', name: 'AP Biology' },
-  { id: 'chemistry', title: 'Chemistry', name: 'Chemistry' },
-  { id: 'calculus', title: 'Calculus', name: 'Calculus' },
-  { id: 'spanish', title: 'Spanish', name: 'Spanish' },
-  { id: 'digital-art', title: 'Digital Art', name: 'Digital Art' },
-];
+import ALL_SUBJECTS from '@/lib/subjectData';
+
+const allSubjects = ALL_SUBJECTS;
 
 const Schedule = () => {
   // types
@@ -35,7 +31,23 @@ const Schedule = () => {
   const { toast: showToast } = useToast();
 
   const [sessions, setSessions] = useState<any[]>([]);
+  const cachedProfiles = useRef<Record<string,string>>({});
   const [subjectsList, setSubjectsList] = useState<SubjectItem[]>(allSubjects as SubjectItem[]);
+  // combine fetched subjects with local fallback list and dedupe by id/title
+  const availableSubjects: SubjectItem[] = (() => {
+    const map = new Map<string, SubjectItem>();
+    // prefer server subjectsList first
+    (subjectsList || []).forEach(s => {
+      const key = String(s.id || s.title || s.name || s);
+      map.set(key, s);
+    });
+    // add local fallbacks for missing ones
+    (allSubjects || []).forEach(s => {
+      const key = String(s.id || s.title || s.name || s);
+      if (!map.has(key)) map.set(key, s);
+    });
+    return Array.from(map.values());
+  })();
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showSessionDialog, setShowSessionDialog] = useState(false);
@@ -46,10 +58,64 @@ const Schedule = () => {
   const [form, setForm] = useState({ title: '', subject_id: '', date: '', time: '', duration: 30, capacity: 10 });
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [showAttendeesDialog, setShowAttendeesDialog] = useState(false);
-  const [attendees, setAttendees] = useState<Array<{ id: string; display_name?: string; full_name?: string; username?: string; email?: string }>>([]);
+  const [attendees, setAttendees] = useState<Array<{ id: string; display_name?: string; username?: string; email?: string }>>([]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [hostDialogCloseTrigger, setHostDialogCloseTrigger] = useState(0);
+  const [appKey, setAppKey] = useState(0);
+
+  const cleanupStuckOverlays = () => {
+    try {
+      const root = document.getElementById('root');
+      const els = Array.from(document.body.children) as HTMLElement[];
+      els.forEach(el => {
+        if (el === root) return;
+        const style = window.getComputedStyle(el);
+        const pos = style.position;
+        if (pos !== 'fixed' && pos !== 'absolute') return;
+        const z = parseInt(style.zIndex || '0', 10) || 0;
+        const rect = el.getBoundingClientRect();
+        const coversScreen = rect.width >= window.innerWidth * 0.8 && rect.height >= window.innerHeight * 0.5;
+        if (coversScreen && z >= 100) {
+          console.debug('Removing potential stuck overlay element:', el, { zIndex: z, rect });
+          el.remove();
+        }
+      });
+
+      // Also remove large portal dialogs
+      const dialogs = Array.from(document.querySelectorAll('div[role="dialog"], [data-radix-portal], .radix-portal')) as HTMLElement[];
+      dialogs.forEach(d => {
+        const rect = d.getBoundingClientRect();
+        const covers = rect.width >= window.innerWidth * 0.5 || rect.height >= window.innerHeight * 0.4;
+        if (covers) {
+          console.debug('Removing potential stuck dialog portal (body-level):', d, { rect });
+          d.remove();
+        }
+      });
+
+      // Also scan inside the app root for portal remnants or overlays
+      if (root) {
+        const innerEls = Array.from(root.querySelectorAll('[role="dialog"], [data-radix-portal], .radix-portal, .overlay, .portal')) as HTMLElement[];
+        innerEls.forEach(d => {
+          const rect = d.getBoundingClientRect();
+          const covers = rect.width >= window.innerWidth * 0.5 || rect.height >= window.innerHeight * 0.4;
+          if (covers) {
+            console.debug('Removing potential stuck dialog portal (root-level):', d, { rect });
+            d.remove();
+          } else {
+            // if not covering entire screen, hide it to restore interaction
+            d.style.display = 'none';
+          }
+        });
+      }
+
+      document.body.style.pointerEvents = 'auto';
+      if (root) root.style.pointerEvents = 'auto';
+    } catch (e) {
+      console.warn('cleanupStuckOverlays error', e);
+    }
+  };
 
   const isCreateValid = Boolean(form.subject_id && form.date && form.time);
 
@@ -63,11 +129,24 @@ const Schedule = () => {
       let profileMap: Record<string, string> = {};
       if (hostIds.length > 0) {
         try {
-          const { data: profiles, error: pErr } = await supabase.from('profiles').select('id,display_name,full_name').in('id', hostIds as any);
+          // Work around PostgREST "in" encoding edgecases by using `.eq` for single id
+          let profilesRes: any = null;
+          // Only request columns we know are present in the user's DB.
+          // `display_name` is present; `username` or other columns may not exist in some schemas.
+          if (hostIds.length === 1) {
+            profilesRes = await supabase.from('profiles').select('id,display_name').eq('id', String(hostIds[0]));
+          } else {
+            profilesRes = await supabase.from('profiles').select('id,display_name').in('id', hostIds as any);
+          }
+          const profiles = profilesRes?.data ?? profilesRes?.data;
+          const pErr = profilesRes?.error;
           if (!pErr && profiles) {
             (profiles as any).forEach((p: any) => {
-              profileMap[p.id] = p.display_name || p.full_name || '';
+              // prefer a human-friendly display name, fall back to email local-part if available
+              profileMap[p.id] = p.display_name || (p.email ? String(p.email).split('@')[0] : '') || '';
             });
+          } else if (pErr) {
+            console.warn('Could not fetch profiles for host names', pErr);
           }
         } catch (e) {
           console.warn('Could not fetch profiles for host names', e);
@@ -143,7 +222,11 @@ const Schedule = () => {
     const openCreate = q.get('openCreate');
     const subjectFromQuery = q.get('subject');
     if (openCreate === '1') setShowCreateDialog(true);
-    if (subjectFromQuery) setForm(f => ({ ...f, subject_id: subjectFromQuery }));
+    if (subjectFromQuery) {
+      setForm(f => ({ ...f, subject_id: subjectFromQuery }));
+      // auto-apply subject filter when navigating from a lesson or subject link
+      try { setSubjectFilter(subjectFromQuery); } catch (e) { /* ignore */ }
+    }
   }, [location.search]);
 
   // when auth state changes (user logs in/out), refresh sessions so isHost/isJoined flags update
@@ -256,12 +339,12 @@ const Schedule = () => {
           // Do not auto-open the dialog. Generate a meeting link and notify the user.
           const slug = localId.slice(0, 8);
           const userPart = user.id ? String(user.id).slice(0, 6) : 'guest';
-          const link = `https://meet.google.com/lookup/${slug}-${userPart}`;
+           const link = `https://meet.google.com/lookup/${slug}-${userPart}`; // removed automatic clipboard copy for privacy — user will see the link in the UI
           setJoinLink(link);
           setSelectedSession(localSession as any);
           setShowCreateDialog(false);
           setForm({ title: '', subject_id: '', date: '', time: '', duration: 30, capacity: 10 });
-          try { navigator?.clipboard?.writeText(link); } catch (e) { /* ignore */ }
+           // removed automatic clipboard copy for privacy — user will see the link in the UI
           showToast({ title: 'Created locally', description: 'Session created locally. Meeting link generated and saved.' });
           return;
         }
@@ -430,7 +513,8 @@ const Schedule = () => {
         setShowAttendeesDialog(true);
         return;
       }
-      const { data: profiles } = await supabase.from('profiles').select('id,display_name,full_name,username,email').in('id', uids as any);
+      // Only request display_name/email to match common schemas
+      const { data: profiles } = await supabase.from('profiles').select('id,display_name,email').in('id', uids as any);
       setAttendees((profiles as any) || []);
       setShowAttendeesDialog(true);
     } catch (e) {
@@ -525,51 +609,76 @@ const Schedule = () => {
     setSessionToDelete(sessionId);
     setShowDeleteConfirm(true);
   };
-
-  const handleDeleteSession = () => {
-    if (isDeleting) return; // Prevent double-clicks
-    
+  const handleDeleteSession = async () => {
+    if (isDeleting) return;
     const sessionId = sessionToDelete;
     if (!sessionId) return;
-    
+
     setIsDeleting(true);
-    
-    // Use setTimeout to ensure state updates happen on next tick
-    setTimeout(() => {
-      setShowDeleteConfirm(false);
-      setSessionToDelete(null);
-      
-      // Remove from UI immediately
-      setSessions(prev => (prev || []).filter(s => s.id !== sessionId));
-      
+    // keep the delete confirmation open while the delete is in progress
+    // capture the session and close possible open dialogs/host controls
+    const removed = (sessions || []).find((s:any) => String(s.id) === String(sessionId));
+    // close any open session preview and attendees modal to avoid portal issues
+    setSelectedSession(null);
+    setShowSessionDialog(false);
+    setShowAttendeesDialog(false);
+    // signal SessionCard instances to close their host dialogs
+    setHostDialogCloseTrigger(t => t + 1);
+
+    try {
       if (String(sessionId).startsWith('local-')) {
+        // remove local sessions immediately
+        setSessions(prev => (prev || []).filter(s => String(s.id) !== String(sessionId)));
         showToast({ title: 'Session removed', description: 'Local session removed.' });
-        setIsDeleting(false);
         return;
       }
-      
-      // Delete from database without blocking
-      supabase.from('sessions').delete().eq('id', sessionId)
-        .then(({ error }) => {
-          if (error) {
-            console.error('delete session error', error);
-            showToast({ title: 'Deleted', description: 'Session removed from view.' });
-          } else {
-            showToast({ title: 'Success', description: 'Session permanently deleted.' });
-          }
-        })
-        .catch((e) => {
-          console.error('handleDeleteSession error', e);
-          showToast({ title: 'Deleted', description: 'Session removed from view.' });
-        })
-        .finally(() => {
-          setIsDeleting(false);
-        });
-    }, 0);
+
+      const { data: delData, error } = await supabase.from('sessions').delete().eq('id', sessionId).select();
+      if (error) {
+        console.error('delete session error', error);
+        // do not remove session (it remains visible); inform user with details
+        showToast({ title: 'Delete failed', description: error.message || 'Could not delete session on server.', variant: 'destructive' });
+        try {
+          const debug = { error, delData };
+          console.debug('Supabase delete error detail:', debug);
+          // debug info (no clipboard copy to respect privacy)
+          console.debug('Delete failed response:', debug);
+        } catch (e) {
+          // ignore
+        }
+        // log full error to console for debugging
+        console.debug('Supabase delete error detail:', error);
+      } else {
+        // remove from UI after server confirms deletion
+        setSessions(prev => (prev || []).filter(s => String(s.id) !== String(sessionId)));
+        showToast({ title: 'Success', description: 'Session permanently deleted.' });
+        try {
+          const debug = { delData };
+          console.debug('Supabase delete success detail:', debug);
+          console.debug('Delete success response:', debug);
+        } catch (e) {}
+        // reflect server state by re-fetching as well
+        await fetchSessions();
+      }
+    } catch (e) {
+      console.error('handleDeleteSession error', e);
+      // on unexpected error, keep the session visible and notify
+      showToast({ title: 'Delete failed', description: (e as any)?.message || 'An error occurred while deleting.', variant: 'destructive' });
+    } finally {
+      // close the confirmation dialog now that the operation finished
+      setShowDeleteConfirm(false);
+      setSessionToDelete(null);
+      setIsDeleting(false);
+      // force a lightweight remount of this page to ensure any Radix portals/overlays are removed
+      // (works around stuck overlays left by nested dialogs)
+      try { setAppKey(k => k + 1); } catch (e) { /* ignore */ }
+      // also attempt a defensive DOM cleanup of any stuck overlays
+      try { cleanupStuckOverlays(); } catch (e) { /* ignore */ }
+    }
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <div key={appKey} className="min-h-screen bg-background">
       <Navigation />
       <div className="container py-8">
         <div className="flex items-center justify-between mb-8">
@@ -586,11 +695,11 @@ const Schedule = () => {
         <div className="flex justify-center mb-6 gap-2">
           <Select value={subjectFilter} onValueChange={v => setSubjectFilter(v)}>
             <SelectTrigger className="w-64">
-              <SelectValue>{subjectFilter && subjectFilter !== 'all' ? (subjectsList.find((s:any) => s.id === subjectFilter)?.name || subjectFilter) : 'All Subjects'}</SelectValue>
+              <SelectValue>{subjectFilter && subjectFilter !== 'all' ? (availableSubjects.find((s:any) => s.id === subjectFilter)?.name || subjectFilter) : 'All Subjects'}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Subjects</SelectItem>
-              {(subjectsList || allSubjects).map((s: any, i: number) => (
+              {availableSubjects.map((s: any, i: number) => (
                 <SelectItem key={s.id || i} value={s.id || s.title}>{s.name || s.title}</SelectItem>
               ))}
             </SelectContent>
@@ -621,6 +730,7 @@ const Schedule = () => {
                     onDetails={() => { setSelectedSession(session); setShowSessionDialog(true); }}
                     isHost={session.isHost}
                     isJoined={session.isJoined}
+                    closeHostDialogTrigger={hostDialogCloseTrigger}
                     {...session}
                   />
                 ))}
@@ -672,10 +782,10 @@ const Schedule = () => {
                 <Label>Subject</Label>
                 <Select onValueChange={(v:any) => setForm((f:any) => ({ ...f, subject_id: v }))}>
                   <SelectTrigger>
-                    <SelectValue>{subjectsList.find((s:any) => s.id === form.subject_id)?.name || subjectsList.find((s:any) => s.title === form.subject_id)?.title || 'Select a subject'}</SelectValue>
+                    <SelectValue>{availableSubjects.find((s:any) => s.id === form.subject_id)?.name || availableSubjects.find((s:any) => s.title === form.subject_id)?.title || 'Select a subject'}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    {(subjectsList || allSubjects).map((s: any, i: number) => (
+                    {availableSubjects.map((s: any, i: number) => (
                       <SelectItem key={s.id || i} value={s.id || s.title}>{s.name || s.title}</SelectItem>
                     ))}
                   </SelectContent>
@@ -747,6 +857,7 @@ const Schedule = () => {
                       onViewAttendees={() => handleViewAttendees(selectedSession.id)}
                       isHost={selectedSession.isHost}
                       isJoined={selectedSession.isJoined}
+                        closeHostDialogTrigger={hostDialogCloseTrigger}
                     />
                   </div>
 
@@ -804,9 +915,9 @@ const Schedule = () => {
               {attendees && attendees.length > 0 ? (
                 attendees.map(a => (
                   <div key={a.id} className="flex items-center gap-3 p-3 border rounded hover:bg-muted/50 transition-colors">
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold">{(a.display_name || a.full_name || a.username || 'U').charAt(0).toUpperCase()}</div>
+                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold">{(a.display_name || a.username || 'U').charAt(0).toUpperCase()}</div>
                     <div className="flex-1">
-                      <div className="font-medium">{a.display_name || a.full_name || a.username || 'User'}</div>
+                      <div className="font-medium">{a.display_name || a.username || 'User'}</div>
                       {a.username && <div className="text-xs text-muted-foreground">@{a.username}</div>}
                     </div>
                   </div>
@@ -838,7 +949,15 @@ const Schedule = () => {
                 disabled={isDeleting}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
-                {isDeleting ? 'Deleting...' : 'Delete'}
+                {isDeleting ? (
+                  <span className="inline-flex items-center">
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-destructive-foreground" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                    </svg>
+                    Deleting...
+                  </span>
+                ) : 'Delete'}
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>
