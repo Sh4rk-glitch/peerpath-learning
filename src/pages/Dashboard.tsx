@@ -112,6 +112,7 @@ const Dashboard = () => {
           .limit(6);
 
         const sessionSubjectIds = (sessionsRows ?? []).map((s: any) => s.subject_id).filter(Boolean);
+        // we'll fetch subject names for any sessions we show
         const { data: sessionSubjects } = await supabase
           .from('subjects')
           .select('id, name')
@@ -124,6 +125,8 @@ const Dashboard = () => {
           time: new Date(s.start_time).toLocaleString(),
           subject: sessionSubjectMap.get(s.subject_id) ?? 'General'
         }));
+
+        // (user upcoming sessions will be fetched after we load joined session ids)
 
         // 5) Recent activity: combine recent progress updates & session joins
         const recentProgress = (progressRows ?? []).slice(0, 8).map((r: any) => ({
@@ -145,6 +148,34 @@ const Dashboard = () => {
           .from('sessions')
           .select('id, title, start_time')
           .in('id', sessionIds || []);
+
+        // Fetch the user's upcoming joined sessions (start_time >= now) and prefer showing these
+        let userUpcoming: any[] = [];
+        try {
+          if ((sessionIds || []).length > 0) {
+            const { data: userUpcomingRows } = await supabase
+              .from('sessions')
+              .select('id, title, start_time, subject_id')
+              .in('id', sessionIds || [])
+              .gte('start_time', nowIso)
+              .order('start_time', { ascending: true });
+
+            const userSubjectIds = (userUpcomingRows ?? []).map((s: any) => s.subject_id).filter(Boolean);
+            if (userSubjectIds.length > 0) {
+              const { data: userSubjects } = await supabase
+                .from('subjects')
+                .select('id, name')
+                .in('id', userSubjectIds || []);
+              (userSubjects ?? []).forEach((us: any) => sessionSubjectMap.set(us.id, us.name));
+            }
+
+            (userUpcomingRows ?? []).forEach((s: any) => {
+              userUpcoming.push({ id: s.id, title: s.title, time: new Date(s.start_time).toLocaleString(), subject: sessionSubjectMap.get(s.subject_id) ?? 'General' });
+            });
+          }
+        } catch (e) {
+          console.warn('Error fetching user upcoming sessions', e);
+        }
 
         const joinedMap = new Map((joinedSessionRows ?? []).map((s: any) => [s.id, s]));
 
@@ -194,18 +225,27 @@ const Dashboard = () => {
 
         // Merge in any locally-submitted quiz (best-effort) so dashboard shows immediate feedback
         const localQuizRaw = typeof window !== 'undefined' ? localStorage.getItem('peerpath:quiz:submitted') : null;
-        let localQuiz = null;
-        try { localQuiz = localQuizRaw ? JSON.parse(localQuizRaw) : null; } catch(_) { localQuiz = null; }
+        let localQuizList: any[] = [];
+        try {
+          const parsed = localQuizRaw ? JSON.parse(localQuizRaw) : null;
+          if (Array.isArray(parsed)) localQuizList = parsed;
+          else if (parsed) localQuizList = [parsed];
+        } catch (_) { localQuizList = []; }
 
-        const combined = [...(localQuiz ? [localQuiz] : []), ...recentProgress, ...recentSessions]
+        const combined = [...localQuizList, ...recentProgress, ...recentSessions]
           .sort((a: any, b: any) => new Date(b.time).getTime() - new Date(a.time).getTime())
           .slice(0, 10);
 
       // mark which upcoming sessions the user has joined
       const upcomingMarked = (upcoming || []).map((s:any) => ({ ...s, isJoined: sessionIds.includes(s.id) }));
 
+      // If the user has upcoming joined sessions, prefer showing those in the sidebar
+      const upcomingToShow = (userUpcoming && userUpcoming.length > 0)
+        ? userUpcoming.map((s:any) => ({ ...s, isJoined: true }))
+        : upcomingMarked;
+
       setProgressData(progressDataMapped);
-      setUpcomingSessions(upcomingMarked);
+      setUpcomingSessions(upcomingToShow);
       setRecentActivity(combined);
     } catch (e) {
       console.error('Dashboard load error', e);
@@ -283,6 +323,19 @@ const Dashboard = () => {
     // Otherwise run normal dashboard load
     loadDashboard();
 
+    // Listen for cross-tab dashboard refresh signals via BroadcastChannel (more reliable)
+    let bc: BroadcastChannel | null = null;
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        bc = new BroadcastChannel('peerpath');
+        bc.onmessage = (ev: MessageEvent) => {
+          try {
+            if (ev?.data === 'dashboard:refresh' || ev?.data === 'quiz:submitted') loadDashboard();
+          } catch (e) {}
+        };
+      }
+    } catch (e) {}
+
     // Listen for cross-tab dashboard refresh signals
     const onStorage = (e: StorageEvent) => {
       if (!e.key) return;
@@ -291,7 +344,7 @@ const Dashboard = () => {
       }
     };
     window.addEventListener('storage', onStorage);
-    return () => { window.removeEventListener('storage', onStorage); };
+    return () => { window.removeEventListener('storage', onStorage); try { if (bc) bc.close(); } catch(e){} };
   }, [user, toast, demoMode]);
 
   return (
@@ -434,7 +487,7 @@ const Dashboard = () => {
                       <p className="font-medium">You haven't joined any sessions yet.</p>
                       <p className="text-sm text-muted-foreground">Click below to browse sessions and join one.</p>
                       <div className="mt-3">
-                        <Button onClick={() => window.open('/schedule', '_blank')}>Find Sessions</Button>
+                        <Button onClick={() => navigate('/schedule')}>Find Sessions</Button>
                       </div>
                     </div>
                   ) : (
@@ -454,7 +507,7 @@ const Dashboard = () => {
                   )
                 }
 
-                <Button variant="outline" className="w-full mt-4" onClick={() => window.open('/schedule?mine=1', '_blank')}>
+                <Button variant="outline" className="w-full mt-4" onClick={() => navigate('/schedule?mine=1')}>
                   View Schedule
                 </Button>
               </div>

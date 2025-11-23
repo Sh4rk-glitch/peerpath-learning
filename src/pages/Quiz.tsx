@@ -99,11 +99,23 @@ const Quiz = () => {
         }
       } catch (e) {
         console.warn('Could not persist quiz result to Supabase', e);
-      } finally {
+        } finally {
         try {
           localStorage.setItem('peerpath:dashboard:refresh', Date.now().toString());
           const payload = { type: 'quiz', title: lesson?.title || 'Quiz', score: pct, time: new Date().toISOString() };
-          localStorage.setItem('peerpath:quiz:submitted', JSON.stringify(payload));
+          // Append to a list of recent local quiz submissions so dashboard can show history
+          try {
+            const raw = localStorage.getItem('peerpath:quiz:submitted');
+            const existing = raw ? JSON.parse(raw) : [];
+            const list = Array.isArray(existing) ? existing : (existing ? [existing] : []);
+            list.unshift(payload);
+            // keep up to 25 recent local submissions
+            const trimmed = list.slice(0, 25);
+            localStorage.setItem('peerpath:quiz:submitted', JSON.stringify(trimmed));
+          } catch (e) {
+            // fallback: overwrite with single item if parsing fails
+            localStorage.setItem('peerpath:quiz:submitted', JSON.stringify(payload));
+          }
         } catch(e){}
       }
     })();

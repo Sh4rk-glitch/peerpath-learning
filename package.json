@@ -7,6 +7,8 @@
     "dev": "vite",
     "proxy": "node server/proxy.js",
     "build": "vite build",
+    "generate-sitemap": "node scripts/generate-sitemap.cjs",
+    "postbuild": "node scripts/generate-sitemap.cjs",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview"

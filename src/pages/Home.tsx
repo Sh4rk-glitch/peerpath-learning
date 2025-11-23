@@ -3,6 +3,10 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import Navigation from "@/components/Navigation";
 import SubjectCard from "@/components/SubjectCard";
+import Reveal from "@/components/Reveal";
+import HeroClip from "@/components/HeroClip";
+import { useRef } from "react";
+import useParallaxEffect from "@/hooks/useParallaxEffect";
 import { Microscope, Calculator, BookText, Languages, Palette, Users, Target, Sparkles, ArrowRight, BookOpen } from "lucide-react";
 
 const Home = () => {
@@ -69,57 +73,92 @@ const Home = () => {
     },
   ];
 
+  const subjectsAnchorRef = useRef<HTMLElement | null>(null);
+  const subjectsBgRef = useRef<HTMLDivElement | null>(null);
+  useParallaxEffect(subjectsAnchorRef, subjectsBgRef, 0.12);
+
   return (
     <div className="min-h-screen bg-background">
-      <Navigation />
+      <Reveal anim="fade">
+        <Navigation />
+      </Reveal>
       
       {/* Hero Section */}
+      <HeroClip />
+
       <section className="relative overflow-hidden bg-gradient-hero py-20 md:py-32">
         <div className="container">
-          <div className="mx-auto max-w-3xl text-center space-y-8 animate-in">
-            <h1 className="text-balance">
-              Learn with friends.
-              <br />
-              <span className="text-primary">Teach and share.</span>
-            </h1>
-            
-            <p className="text-xl text-muted-foreground max-w-2xl mx-auto text-balance">
-              PeerPath is where students collaborate, build skills through interactive pathways, 
-              and grow together through peer mentoring.
-            </p>
-            
+          <div className="mx-auto max-w-3xl text-center space-y-8">
+            <Reveal anim="up">
+              <h1 className="text-balance">
+                Learn with friends.
+                <br />
+                <span className="text-primary">Teach and share.</span>
+              </h1>
+            </Reveal>
+
+            <Reveal anim="fade">
+              <p className="text-xl text-muted-foreground max-w-2xl mx-auto text-balance">
+                PeerPath is where students collaborate, build skills through interactive pathways, 
+                and grow together through peer mentoring.
+              </p>
+            </Reveal>
+
             <div className="flex flex-wrap gap-4 justify-center">
-              <Link to="/schedule">
-                <Button size="lg" className="gap-2">
-                  Find Study Sessions
-                  <ArrowRight className="h-4 w-4" />
-                </Button>
-              </Link>
-              <Link to="/schedule">
-                <Button size="lg" variant="outline">
-                  Create a Room
-                </Button>
-              </Link>
+              <Reveal anim="up">
+                <Link to="/schedule">
+                  <Button size="lg" className="gap-2">
+                    Find Study Sessions
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </Link>
+              </Reveal>
+              <Reveal anim="up">
+                <Link to="/schedule">
+                  <Button size="lg" variant="outline">
+                    Create a Room
+                  </Button>
+                </Link>
+              </Reveal>
             </div>
 
-            <div className="flex flex-wrap gap-6 justify-center text-sm text-muted-foreground pt-4">
-              <div className="flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-success animate-pulse" />
-                <span><strong className="text-foreground">1,247</strong> active learners</span>
+            <Reveal anim="fade">
+              <div className="flex flex-wrap gap-6 justify-center text-sm text-muted-foreground pt-4 reveal-stagger">
+                <div style={{ ["--reveal-index" as any]: 0 }}>
+                  <Reveal anim="up">
+                    <div className="flex items-center gap-2">
+                      <div className="h-2 w-2 rounded-full bg-success animate-pulse" />
+                      <span><strong className="text-foreground">1,247</strong> active learners</span>
+                    </div>
+                  </Reveal>
+                </div>
+                <div style={{ ["--reveal-index" as any]: 1 }}>
+                  <Reveal anim="up">
+                    <div>
+                      <strong className="text-foreground">45</strong> sessions today
+                    </div>
+                  </Reveal>
+                </div>
+                <div style={{ ["--reveal-index" as any]: 2 }}>
+                  <Reveal anim="up">
+                    <div>
+                      <strong className="text-foreground">89%</strong> satisfaction rate
+                    </div>
+                  </Reveal>
+                </div>
               </div>
-              <div>
-                <strong className="text-foreground">45</strong> sessions today
-              </div>
-              <div>
-                <strong className="text-foreground">89%</strong> satisfaction rate
-              </div>
-            </div>
+            </Reveal>
           </div>
         </div>
       </section>
 
       {/* Subjects Section */}
-      <section className="py-16 md:py-24">
+      {/* Explore Subjects with parallax background */}
+      <section className="py-16 md:py-24 relative" ref={subjectsAnchorRef}>
+        <div className="absolute inset-0 pointer-events-none -z-10">
+          <div id="subjects-bg" ref={subjectsBgRef} className="h-full w-full bg-gradient-to-b from-primary/6 via-transparent to-transparent opacity-80 will-change-transform" />
+        </div>
+
         <div className="container">
           <div className="mb-12">
             <h2 className="mb-4">Explore Subjects</h2>
@@ -128,9 +167,13 @@ const Home = () => {
             </p>
           </div>
 
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {subjects.map((subject) => (
-              <SubjectCard key={subject.title} {...subject} />
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 reveal-stagger">
+            {subjects.map((subject, i) => (
+              <div key={subject.title} style={{ ["--reveal-index" as any]: i }}>
+                <Reveal anim="up">
+                  <SubjectCard {...subject} />
+                </Reveal>
+              </div>
             ))}
           </div>
         </div>
@@ -146,15 +189,19 @@ const Home = () => {
             </p>
           </div>
 
-          <div className="grid gap-8 md:grid-cols-3">
+          <div className="grid gap-8 md:grid-cols-3 reveal-stagger">
             {howItWorks.map((step, index) => (
-              <Card key={index} className="p-8 text-center space-y-4">
-                <div className="mx-auto w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
-                  {step.icon}
-                </div>
-                <h3 className="text-xl">{step.title}</h3>
-                <p className="text-muted-foreground">{step.description}</p>
-              </Card>
+              <div key={index} style={{ ["--reveal-index" as any]: index }}>
+                <Reveal anim="up">
+                  <Card className="p-8 text-center space-y-4">
+                    <div className="mx-auto w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                      {step.icon}
+                    </div>
+                    <h3 className="text-xl">{step.title}</h3>
+                    <p className="text-muted-foreground">{step.description}</p>
+                  </Card>
+                </Reveal>
+              </div>
             ))}
           </div>
         </div>
@@ -163,57 +210,75 @@ const Home = () => {
       {/* CTA Section */}
       <section className="py-16 md:py-24">
         <div className="container">
-          <Card className="p-12 text-center bg-gradient-card">
-            <h2 className="mb-4">Ready to start learning?</h2>
-            <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
-              Join thousands of students mastering skills together
-            </p>
-            <Link to="/auth">
-              <Button size="lg">Get Started Free</Button>
-            </Link>
-          </Card>
+          <Reveal anim="up">
+            <Card className="p-12 text-center bg-gradient-card">
+              <h2 className="mb-4">Ready to start learning?</h2>
+              <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
+                Join thousands of students mastering skills together
+              </p>
+              <Link to="/auth">
+                <Button size="lg">Get Started Free</Button>
+              </Link>
+            </Card>
+          </Reveal>
         </div>
       </section>
 
       {/* Footer */}
       <footer className="border-t py-12">
         <div className="container">
-          <div className="grid gap-8 md:grid-cols-4">
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 font-semibold">
-                <BookOpen className="h-5 w-5 text-primary" />
-                <span>PeerPath</span>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Empowering students through collaborative learning
-              </p>
+          <div className="grid gap-8 md:grid-cols-4 reveal-stagger">
+            <div style={{ ["--reveal-index" as any]: 0 }}>
+              <Reveal anim="up">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 font-semibold">
+                    <BookOpen className="h-5 w-5 text-primary" />
+                    <span>PeerPath</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Empowering students through collaborative learning
+                  </p>
+                </div>
+              </Reveal>
             </div>
-            
-            <div>
-              <h4 className="font-semibold mb-3">Platform</h4>
-              <ul className="space-y-2 text-sm text-muted-foreground">
-                <li><a href="#" className="hover:text-foreground transition-colors">Subjects</a></li>
-                <li><a href="#" className="hover:text-foreground transition-colors">Schedule</a></li>
-                <li><a href="#" className="hover:text-foreground transition-colors">Resources</a></li>
-              </ul>
+
+            <div style={{ ["--reveal-index" as any]: 1 }}>
+              <Reveal anim="up">
+                <div>
+                  <h4 className="font-semibold mb-3">Platform</h4>
+                  <ul className="space-y-2 text-sm text-muted-foreground">
+                    <li><Link to="/subjects" className="hover:text-foreground transition-colors">Subjects</Link></li>
+                    <li><Link to="/schedule" className="hover:text-foreground transition-colors">Schedule</Link></li>
+                    <li><Link to="/resources" className="hover:text-foreground transition-colors">Resources</Link></li>
+                  </ul>
+                </div>
+              </Reveal>
             </div>
-            
-            <div>
-              <h4 className="font-semibold mb-3">Support</h4>
-              <ul className="space-y-2 text-sm text-muted-foreground">
-                <li><a href="#" className="hover:text-foreground transition-colors">Help Center</a></li>
-                <li><a href="#" className="hover:text-foreground transition-colors">Community</a></li>
-                <li><a href="#" className="hover:text-foreground transition-colors">Contact</a></li>
-              </ul>
+
+            <div style={{ ["--reveal-index" as any]: 2 }}>
+              <Reveal anim="up">
+                <div>
+                  <h4 className="font-semibold mb-3">Support</h4>
+                  <ul className="space-y-2 text-sm text-muted-foreground">
+                    <li><Link to="/help" className="hover:text-foreground transition-colors">Help Center</Link></li>
+                    <li><Link to="/community" className="hover:text-foreground transition-colors">Community</Link></li>
+                    <li><Link to="/contact" className="hover:text-foreground transition-colors">Contact</Link></li>
+                  </ul>
+                </div>
+              </Reveal>
             </div>
-            
-            <div>
-              <h4 className="font-semibold mb-3">Legal</h4>
-              <ul className="space-y-2 text-sm text-muted-foreground">
-                <li><a href="#" className="hover:text-foreground transition-colors">Privacy</a></li>
-                <li><a href="#" className="hover:text-foreground transition-colors">Terms</a></li>
-                <li><a href="#" className="hover:text-foreground transition-colors">Accessibility</a></li>
-              </ul>
+
+            <div style={{ ["--reveal-index" as any]: 3 }}>
+              <Reveal anim="up">
+                <div>
+                  <h4 className="font-semibold mb-3">Legal</h4>
+                  <ul className="space-y-2 text-sm text-muted-foreground">
+                    <li><Link to="/privacy" className="hover:text-foreground transition-colors">Privacy</Link></li>
+                    <li><Link to="/terms" className="hover:text-foreground transition-colors">Terms</Link></li>
+                    <li><Link to="/accessibility" className="hover:text-foreground transition-colors">Accessibility</Link></li>
+                  </ul>
+                </div>
+              </Reveal>
             </div>
           </div>
           

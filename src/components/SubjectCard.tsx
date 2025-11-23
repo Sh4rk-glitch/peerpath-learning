@@ -1,5 +1,6 @@
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Clock, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -56,6 +57,11 @@ const SubjectCard = ({ title, category, nextSession, activeUsers, icon }: Subjec
         <Badge className="mt-4" variant="secondary">
           Explore
         </Badge>
+        <div className="mt-3">
+          <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); navigate(`/schedule?subject=${encodeURIComponent(title)}`); }}>
+            Sessions for {title}
+          </Button>
+        </div>
       </div>
       
       <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />

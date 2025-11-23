@@ -33,6 +33,8 @@ const Subjects = () => {
   const [showLessonDialog, setShowLessonDialog] = useState(false);
   const [quizQuestions, setQuizQuestions] = useState<any[] | null>(null);
   const [showQuizDialog, setShowQuizDialog] = useState(false);
+  const [selectedSession, setSelectedSession] = useState<any | null>(null);
+  const [showSessionDialog, setShowSessionDialog] = useState(false);
   const [enhancedQuizQuestions, setEnhancedQuizQuestions] = useState<any[] | null>(null);
   const [enhancedReady, setEnhancedReady] = useState(false);
   const [quizAnswers, setQuizAnswers] = useState<Record<number, number>>({});
@@ -54,6 +56,17 @@ const Subjects = () => {
         const { data } = await supabase.from('sessions').select('*').eq('subject_id', subjectId);
         setSubjectSessions(data || []);
       }
+      // signal dashboard (and other tabs) to refresh so Upcoming Sessions updates
+      try { localStorage.setItem('peerpath:dashboard:refresh', Date.now().toString()); } catch(e){}
+      try {
+        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+          const bc = new BroadcastChannel('peerpath');
+          bc.postMessage('dashboard:refresh');
+          bc.close();
+        }
+      } catch (e) {}
+      // signal dashboard (and other tabs) to refresh so Upcoming Sessions updates
+      try { localStorage.setItem('peerpath:dashboard:refresh', Date.now().toString()); } catch(e){}
     } catch (err: any) {
       toast({ title: 'Error joining session', description: err?.message || String(err), variant: 'destructive' });
     }
@@ -191,16 +204,40 @@ const Subjects = () => {
 
         {selected && (
           <section className="mt-12">
-            <h2 className="mb-4">Live Sessions for {selected.title}</h2>
-            {subjectSessions.length > 0 ? (
-              <div className="grid gap-6 md:grid-cols-2">
-                {subjectSessions.map((session) => (
-                  <SessionCard key={session.id} sessionId={session.id} onJoin={() => handleJoin(session.id)} {...session} />
-                ))}
+              <div className="mb-4">
+                <button
+                  onClick={() => navigate(`/schedule?subject=${encodeURIComponent((selected as any)?.id || selected.title)}`)}
+                  className="w-full text-left group relative overflow-hidden rounded-lg p-6 bg-gradient-to-r from-primary/5 to-transparent hover:shadow-lg transition-transform transform hover:scale-[1.02]"
+                  aria-label={`Sessions for ${selected.title}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm text-muted-foreground">Live Sessions</div>
+                      <div className="text-2xl font-semibold">Sessions for {selected.title}</div>
+                    </div>
+                    <div className="text-sm text-muted-foreground">View schedule</div>
+                  </div>
+                  {/* fluid hover overlay */}
+                  <div className="pointer-events-none absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="absolute -inset-6 bg-[radial-gradient(circle_at_var(--x,50%)_var(--y,50%),rgba(255,255,255,0.06),transparent_30%)] transform-gpu will-change-transform" style={{ transition: 'opacity 220ms ease, transform 220ms ease' }} />
+                  </div>
+                </button>
               </div>
-            ) : (
-              <p className="text-muted-foreground mb-6">No upcoming sessions for {selected.title}. Be the first to create one!</p>
-            )}
+              {subjectSessions.length > 0 ? (
+                <div className="grid gap-6 md:grid-cols-2">
+                  {subjectSessions.map((session) => (
+                    <SessionCard
+                      key={session.id}
+                      sessionId={session.id}
+                      onJoin={() => handleJoin(session.id)}
+                      onDetails={() => { setSelectedSession(session); setShowSessionDialog(true); }}
+                      {...session}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-muted-foreground mb-6">No upcoming sessions for {selected.title}. Be the first to create one!</p>
+              )}
 
             <h2 className="mb-4 mt-8">Learning Pathway and Resources</h2>
             <p className="text-muted-foreground mb-6">Learning pathway and resources for {selected.title}.</p>
@@ -245,6 +282,33 @@ const Subjects = () => {
               </DialogContent>
             </Dialog>
 
+            {/* Session viewer dialog */}
+            <Dialog open={showSessionDialog} onOpenChange={setShowSessionDialog}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>{selectedSession?.title || 'Session Details'}</DialogTitle>
+                  <DialogDescription>Session information and join options.</DialogDescription>
+                </DialogHeader>
+                <div className="mt-4">
+                  {selectedSession ? (
+                    <div>
+                      <p className="font-medium">Subject: {selectedSession.subject_id || selectedSession.subject || 'General'}</p>
+                      <p className="text-sm text-muted-foreground">Time: {selectedSession.start_time ? new Date(selectedSession.start_time).toLocaleString() : 'TBD'}</p>
+                      <p className="mt-2 text-sm">{selectedSession.description || selectedSession.title}</p>
+                    </div>
+                  ) : (
+                    <p>No session selected.</p>
+                  )}
+                </div>
+                <DialogFooter>
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setShowSessionDialog(false)}>Close</Button>
+                    <Button onClick={() => { if (selectedSession) { handleJoin(selectedSession.id); setShowSessionDialog(false); } }}>Join Session</Button>
+                  </div>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
             {/* Quiz dialog */}
             <Dialog open={showQuizDialog} onOpenChange={setShowQuizDialog}>
               <DialogContent>
@@ -278,7 +342,7 @@ const Subjects = () => {
                         if (!selectedLesson) return;
                         try {
                           const url = `/quiz?subject=${encodeURIComponent((selected as any)?.title?.toLowerCase() || '')}&index=${encodeURIComponent(String(lessons.findIndex(l=>l===selectedLesson)+1 || 1))}&count=${encodeURIComponent(String(quizCount))}&style=${encodeURIComponent(String(quizStyle))}&newtab=1`;
-                          window.open(url, '_blank');
+                          navigate(url);
                         } catch (e) {
                           console.error('Could not open quiz in new tab', e);
                         }
@@ -361,9 +425,9 @@ const LessonCard = ({ subject, index, lesson, subjectSlug, onView, onQuiz }: { s
         <Button size="sm" onClick={() => {
           if (onQuiz) return onQuiz();
           // open quiz directly in a new tab with sensible defaults
-          try {
+            try {
             const url = `/quiz?subject=${encodeURIComponent(subjectSlug)}&index=${index}&count=5&style=mixed&newtab=1`;
-            window.open(url, '_blank');
+            navigate(url);
           } catch (e) {
             navigate(`/lesson?subject=${encodeURIComponent(subjectSlug)}&index=${index}`);
           }

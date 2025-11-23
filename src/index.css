@@ -140,6 +140,61 @@ All colors MUST be HSL.
     animation: fadeInUp 0.5s ease-out;
   }
 
+  /* Scroll reveal utilities */
+  .reveal {
+    opacity: 0;
+    transform: translateY(12px);
+    transition: opacity 560ms cubic-bezier(.2,.9,.2,1), transform 560ms cubic-bezier(.2,.9,.2,1);
+    will-change: opacity, transform;
+  }
+
+  .reveal-up { transform: translateY(18px); }
+  .reveal-left { transform: translateX(-18px); }
+  .reveal-fade { transform: none; }
+
+  .reveal.in-view { opacity: 1; transform: translateY(0) translateX(0); }
+
+  /* Stagger helper: apply to a parent to stagger children (.reveal) */
+  .reveal-stagger > * { transition-delay: calc(var(--reveal-index, 0) * 80ms); }
+
+  /* Respect reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    .reveal, .reveal.in-view {
+      opacity: 1 !important;
+      transform: none !important;
+      transition: none !important;
+    }
+  }
+
+  /* Small extra polish for hero heading when revealed */
+  .reveal-up.in-view h1 {
+    transform: translateY(0) scale(1.02);
+    letter-spacing: 0.6px;
+    transition: transform 420ms cubic-bezier(.2,.9,.2,1), letter-spacing 420ms ease;
+    text-shadow: 0 6px 18px rgba(10,10,10,0.06);
+  }
+
+  .reveal-up.in-view p {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* Clip-path transition helper */
+  .transition-clip-path {
+    transition: clip-path 520ms cubic-bezier(.2,.9,.2,1), -webkit-clip-path 520ms cubic-bezier(.2,.9,.2,1);
+  }
+
+  /* will-change for smoother animation */
+  .will-change-clip-path {
+    will-change: clip-path, -webkit-clip-path;
+  }
+
+  /* small transforms for decorative hero shapes */
+  #hero-shape-left, #hero-shape-right {
+    transition: transform 540ms cubic-bezier(.2,.9,.2,1);
+    will-change: transform;
+  }
+
   /* Prevent flicker on theme switch by temporarily disabling transitions */
   .disable-theme-transition * {
     transition: none !important;

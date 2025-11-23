@@ -36,14 +36,15 @@ const Schedule = () => {
   // combine fetched subjects with local fallback list and dedupe by id/title
   const availableSubjects: SubjectItem[] = (() => {
     const map = new Map<string, SubjectItem>();
+    const norm = (v: any) => (String(v || '').toLowerCase().trim());
     // prefer server subjectsList first
     (subjectsList || []).forEach(s => {
-      const key = String(s.id || s.title || s.name || s);
-      map.set(key, s);
+      const key = norm(s.id || s.title || s.name || s);
+      if (!map.has(key)) map.set(key, s);
     });
     // add local fallbacks for missing ones
     (allSubjects || []).forEach(s => {
-      const key = String(s.id || s.title || s.name || s);
+      const key = norm(s.id || s.title || s.name || s);
       if (!map.has(key)) map.set(key, s);
     });
     return Array.from(map.values());
@@ -52,6 +53,7 @@ const Schedule = () => {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showSessionDialog, setShowSessionDialog] = useState(false);
   const [selectedSession, setSelectedSession] = useState<UISession | null>(null);
+  const [openSessionRequest, setOpenSessionRequest] = useState<string | null>(null);
   const [dialogDate, setDialogDate] = useState('');
   const [dialogTime, setDialogTime] = useState('');
   const [joinLink, setJoinLink] = useState('');
@@ -220,6 +222,7 @@ const Schedule = () => {
     fetchSubjects();
     const q = new URLSearchParams(location.search);
     const openCreate = q.get('openCreate');
+    const openSessionId = q.get('open');
     const subjectFromQuery = q.get('subject');
     if (openCreate === '1') setShowCreateDialog(true);
     if (subjectFromQuery) {
@@ -227,14 +230,35 @@ const Schedule = () => {
       // auto-apply subject filter when navigating from a lesson or subject link
       try { setSubjectFilter(subjectFromQuery); } catch (e) { /* ignore */ }
     }
+    if (openSessionId) setOpenSessionRequest(openSessionId);
   }, [location.search]);
+
+  // If a request to open a specific session was made via query param, wait for sessions to load then open it
+  useEffect(() => {
+    if (!openSessionRequest) return;
+    if (!sessions || sessions.length === 0) return;
+    const found = sessions.find(s => String(s.id) === String(openSessionRequest));
+    if (found) {
+      setSelectedSession(found as any);
+      setShowSessionDialog(true);
+      setOpenSessionRequest(null);
+    }
+  }, [openSessionRequest, sessions]);
 
   // when auth state changes (user logs in/out), refresh sessions so isHost/isJoined flags update
   useEffect(() => {
     fetchSessions();
   }, [user]);
 
-  const filteredSessions = subjectFilter && subjectFilter !== 'all' ? sessions.filter((s: any) => s.subject_id === subjectFilter || s.subject === subjectFilter) : sessions;
+  const filteredSessions = subjectFilter && subjectFilter !== 'all' ? sessions.filter((s: any) => {
+    try {
+      const subjVal = String(s.subject || s.subject_id || '').toLowerCase().trim();
+      const filterVal = String(subjectFilter || '').toLowerCase().trim();
+      return subjVal === filterVal || String(s.subject_id) === String(subjectFilter) || String(s.subject) === String(subjectFilter);
+    } catch (e) {
+      return false;
+    }
+  }) : sessions;
 
   const handleCreateDialogOpen = (prefillSubjectId?: string) => {
     if (prefillSubjectId) setForm(f => ({ ...f, subject_id: prefillSubjectId }));
@@ -699,9 +723,23 @@ const Schedule = () => {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Subjects</SelectItem>
-              {availableSubjects.map((s: any, i: number) => (
-                <SelectItem key={s.id || i} value={s.id || s.title}>{s.name || s.title}</SelectItem>
-              ))}
+              {
+                // avoid duplicate display names in the dropdown (normalize by lowercased name)
+                (() => {
+                  const seen = new Set();
+                  const items: any[] = [];
+                  for (let i = 0; i < availableSubjects.length; i++) {
+                    const s: any = availableSubjects[i];
+                    const display = (s.name || s.title || '').toString().toLowerCase().trim();
+                    if (!display || seen.has(display)) continue;
+                    seen.add(display);
+                    items.push(
+                      <SelectItem key={s.id || i} value={s.id || s.title}>{s.name || s.title}</SelectItem>
+                    );
+                  }
+                  return items;
+                })()
+              }
             </SelectContent>
           </Select>
           {subjectFilter && subjectFilter !== 'all' && (
@@ -898,7 +936,7 @@ const Schedule = () => {
                 <Button variant="outline" onClick={() => setShowSessionDialog(false)}>Close</Button>
                 <Button onClick={() => handleJoinWithLink(selectedSession)}>Join Session</Button>
                 {joinLink && (
-                  <Button onClick={() => window.open(joinLink, '_blank')}>Open Meet</Button>
+                  <Button onClick={() => { window.location.href = joinLink; }}>Open Meet</Button>
                 )}
               </div>
             </DialogFooter>

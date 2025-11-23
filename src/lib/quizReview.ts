@@ -8,7 +8,8 @@ export function openQuizReviewInNewTab(questions: any[], answers: Record<number,
       console.warn('Could not write quiz review to sessionStorage', e);
     }
     const url = `/quiz-review?id=${encodeURIComponent(id)}`;
-    window.open(url, '_blank');
+    // Navigate in the same tab instead of opening a new tab
+    window.location.href = url;
     return true;
   } catch (e) {
     console.error('openQuizReviewInNewTab error', e);

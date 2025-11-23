@@ -48,7 +48,7 @@ const Profile = () => {
       setProfile(data);
       setDisplayName(data.display_name || "");
       // prefer explicit username stored in profiles or in auth metadata
-      setUsername(data.username ?? user?.user_metadata?.username ?? "");
+      setUsername(((data as any)?.username) ?? user?.user_metadata?.username ?? "");
       setBio(data.bio || "");
     } catch (error: any) {
       // If profiles table is missing or access denied, fall back to auth metadata
