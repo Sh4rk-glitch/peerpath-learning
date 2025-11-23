@@ -55,27 +55,27 @@ This project is built with:
 - Supabase for backend
 - Deployed using vercel
 
-##Usage
+## Usage
 
 Create an Account
 Sign up or log in using Supabase’s auth system.
 Then you are free to explore!
 
-#Join or Host a Micro-Mentoring Session
+# Join or Host a Micro-Mentoring Session
 
 Select a topic
 Choose “Host” or “Join Now”
 Start your timed, focused session
 
-#Enter a Live Study Room
+# Enter a Live Study Room
 
 Join classmates
 Take AI-generated quizzes
 
-#Track Your Progress
+# Track Your Progress
 Check mastery scores, streaks, upcoming meetings, and suggestions.
 
-##Future Improvements
+## Future Improvements
 
 Larger AI-powered analytics dashboard for teachers or clubs
 Gamified badge system for micro-mentors
@@ -84,5 +84,5 @@ Collaborative “Study Pathways” built by clubs or teachers
 Integration with school LMS systems (Canvas, Schoology)
 Real-time whiteboard for advanced study rooms
 
-##This site was built by: Shourya Mishra, Ali Tauqir, Maykel Silalahi
+## This site was built by: Shourya Mishra, Ali Tauqir, Maykel Silalahi
 Build for FBLA - Website design
